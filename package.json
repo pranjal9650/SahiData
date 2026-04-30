@@ -1,0 +1,13 @@
+{
+  "name": "sahi-data",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names \"API,WEB\" --prefix-colors \"cyan,magenta\" \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd excel_validation_api && venv311\\Scripts\\python -m uvicorn main:app --reload",
+    "dev:frontend": "cd excel_validation_frontend && npm start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
