@@ -1,0 +1,2817 @@
+# =====================================================
+# FASTAPI — FULLY DYNAMIC VERSION
+# =====================================================
+
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from sqlalchemy import extract
+from pydantic import BaseModel as PydanticBaseModel
+from typing import List, Dict, Optional
+from routes import site_monitoring
+
+import scheduler
+import pandas as pd
+import os
+import uuid
+import re
+import requests
+import json
+from datetime import datetime
+from io import BytesIO
+from math import radians, sin, cos, sqrt, atan2
+
+# =====================================================
+# DATABASE
+# =====================================================
+
+from database import SessionLocal, engine
+import models
+
+# =====================================================
+# AUTO CREATE TABLES (runs on startup)
+# =====================================================
+
+models.Base.metadata.create_all(bind=engine)
+
+# =====================================================
+# APP INIT
+# =====================================================
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+app.include_router(site_monitoring.router)
+
+from scheduler import start_scheduler
+
+@app.on_event("startup")
+def startup_event():
+    start_scheduler()
+
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# =====================================================
+# REPORT UPLOAD FOLDER — daily files for email reports
+# =====================================================
+
+REPORT_DAILY_DIR = "data/daily"
+os.makedirs(REPORT_DAILY_DIR, exist_ok=True)
+
+REPORT_FILE_MAP = {
+    "employee":     "employee.xlsx",
+    "attendance":   "attendance.xlsx",
+    "distance":     "distance.xlsx",
+    "forms":        "forms.xlsx",
+    "managers":     "managers.xlsx",
+    "forms_filled": "forms_filled.xlsx",
+    "alarm":        "alarm.csv",
+    "active_sites": "active_sites.xlsx",
+}
+
+# =====================================================
+# DB SESSION
+# =====================================================
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+# =====================================================
+# DATA CLEANER
+# =====================================================
+
+def safe_clean_df(df):
+    df = df.copy()
+
+    df.columns = (
+        df.columns
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .str.replace("\n", " ", regex=False)
+        .str.replace("\r", "", regex=False)
+        .str.replace("_", " ", regex=False)
+        .str.replace("-", " ", regex=False)
+    )
+
+    df.columns = df.columns.str.replace(r"\s+", " ", regex=True)
+
+    df = df.fillna("")
+
+    for col in df.columns:
+        df[col] = df[col].map(lambda x: str(x).strip() if pd.notna(x) else "")
+
+    return df
+
+# =====================================================
+# DYNAMIC VALIDATION ENGINE
+# =====================================================
+
+def apply_dynamic_validation(df, rules):
+    valid_rows   = []
+    invalid_rows = []
+
+    for _, row in df.iterrows():
+        is_valid = True
+
+        for col, rule in rules.items():
+
+            # Normalize column name to match safe_clean_df output
+            normalized_col = (
+                col.strip().lower()
+                .replace("\n", " ").replace("\r", "")
+                .replace("_", " ").replace("-", " ")
+            )
+            normalized_col = re.sub(r"\s+", " ", normalized_col)
+
+            value = str(row.get(normalized_col, "")).strip()
+
+            # ── REQUIRED CHECK ──────────────────────────────
+            if rule.get("required") and not value:
+                is_valid = False
+
+            # ── UUID ────────────────────────────────────────
+            if rule.get("type") == "uuid":
+                if value:
+                    try:
+                        import uuid as _uuid
+                        _uuid.UUID(value)
+                    except (ValueError, AttributeError):
+                        is_valid = False
+
+            # ── SYSTEM ID ────────────────────────────────────
+            if rule.get("type") == "system_id":
+                if value:
+                    prefixes = [p.strip() for p in rule.get("allowed_prefixes", "").split(",") if p.strip()]
+                    if prefixes:
+                        if not any(value.upper().startswith(p.upper()) for p in prefixes):
+                            is_valid = False
+                    else:
+                        # Generic system ID: must have at least one hyphen and end with alphanumeric
+                        if not re.match(r'^[A-Za-z0-9]{1,10}(-[A-Za-z0-9]{1,10}){1,}$', value):
+                            is_valid = False
+
+            # ── USERNAME ─────────────────────────────────────
+            # username: alphanumeric, dots, underscores, hyphens; no spaces; 3-50 chars
+            if rule.get("type") == "username":
+                if value:
+                    if not re.match(r'^[A-Za-z0-9._\-]{3,50}$', value):
+                        is_valid = False
+
+            # ── PHONE ────────────────────────────────────────
+            if rule.get("type") == "phone":
+                if value:
+                    digits = re.sub(r'\D', '', value)
+                    fmt = rule.get("phone_format", "any")
+                    if fmt == "india_10":
+                        if len(digits) != 10 or digits[0] not in "6789":
+                            is_valid = False
+                    elif fmt == "india_with_code":
+                        if not (len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"):
+                            is_valid = False
+                    elif fmt == "international":
+                        if not (7 <= len(digits) <= 15):
+                            is_valid = False
+                    else:  # "any"
+                        if len(digits) < 7:
+                            is_valid = False
+
+            # ── PINCODE ──────────────────────────────────────
+            if rule.get("type") == "pincode":
+                if value:
+                    digits = re.sub(r'\D', '', value)
+                    fmt = rule.get("pincode_format", "any_numeric")
+                    if fmt == "india_6":
+                        if len(digits) != 6:
+                            is_valid = False
+                    elif fmt == "us_zip":
+                        if len(digits) not in (5, 9):
+                            is_valid = False
+                    else:  # any_numeric
+                        if not value.replace("-", "").isdigit() or len(digits) < 3:
+                            is_valid = False
+
+            # ── TEXT / (other non-validated types) ──────────
+            # No special validation — just required check applies
+
+            # ── NUMBER ──────────────────────────────────────
+            if rule.get("type") == "number":
+                if value and not value.replace(".", "", 1).lstrip("-").isdigit():
+                    is_valid = False
+                if value:
+                    try:
+                        n  = float(value)
+                        mn = rule.get("min")
+                        mx = rule.get("max")
+                        if mn != "" and mn is not None and n < float(mn):
+                            is_valid = False
+                        if mx != "" and mx is not None and n > float(mx):
+                            is_valid = False
+                    except ValueError:
+                        is_valid = False
+
+            # ── METER READING ────────────────────────────────
+            if rule.get("type") == "meter_reading":
+                if value:
+                    if not value.isdigit():
+                        is_valid = False
+                    else:
+                        try:
+                            n  = int(value)
+                            mn = rule.get("min")
+                            mx = rule.get("max")
+                            if mn != "" and mn is not None and n < int(mn):
+                                is_valid = False
+                            if mx != "" and mx is not None and n > int(mx):
+                                is_valid = False
+                        except ValueError:
+                            is_valid = False
+
+            # ── CONSUMPTION ──────────────────────────────────
+            if rule.get("type") == "consumption":
+                if value and not value.replace(".", "", 1).lstrip("-").isdigit():
+                    is_valid = False
+
+            # ── INR RATE ─────────────────────────────────────
+            if rule.get("type") == "inr_rate":
+                if value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        float(cleaned)
+                    except ValueError:
+                        is_valid = False
+
+            # ── INR AMOUNT ───────────────────────────────────
+            if rule.get("type") == "inr_amount":
+                if value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        amt = float(cleaned)
+                        mn  = rule.get("min")
+                        mx  = rule.get("max")
+                        if mn != "" and mn is not None and amt < float(mn):
+                            is_valid = False
+                        if mx != "" and mx is not None and amt > float(mx):
+                            is_valid = False
+                    except ValueError:
+                        is_valid = False
+
+            # ── DATETIME ─────────────────────────────────────
+            if rule.get("type") == "datetime":
+                if value:
+                    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+                    if pd.isna(parsed):
+                        is_valid = False
+
+            # ── DATE ─────────────────────────────────────────
+            if rule.get("type") == "date":
+                if value:
+                    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+                    if pd.isna(parsed):
+                        is_valid = False
+
+            # ── APPROVAL FLAG ────────────────────────────────
+            if rule.get("type") == "approval_flag":
+                if value:
+                    true_vals  = [v.strip().lower() for v in rule.get("true_values",  "").split(",") if v.strip()]
+                    false_vals = [v.strip().lower() for v in rule.get("false_values", "").split(",") if v.strip()]
+                    all_vals   = true_vals + false_vals
+                    if all_vals and value.lower() not in all_vals:
+                        is_valid = False
+
+            # ── DROPDOWN ─────────────────────────────────────
+            if rule.get("type") == "dropdown":
+                options_raw = rule.get("options", "")
+                if options_raw and value:
+                    options = [o.strip().lower() for o in options_raw.split(",")]
+                    if value.lower() not in options:
+                        is_valid = False
+
+            # ── EMAIL ────────────────────────────────────────
+            if rule.get("type") == "email":
+                if value:
+                    # Check basic email format: local@domain.tld
+                    if not re.match(r'^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$', value):
+                        is_valid = False
+                    else:
+                        domains = [d.strip().lower() for d in rule.get("allowed_domains", "").split(",") if d.strip()]
+                        if domains:
+                            domain_part = value.split("@", 1)[1].lower()
+                            if domain_part not in domains:
+                                is_valid = False
+
+            # ── LAT/LONG JSON ────────────────────────────────
+            if rule.get("type") == "latlong_json":
+                if value:
+                    try:
+                        geo    = json.loads(value)
+                        coords = geo.get("coordinates")
+                        if not isinstance(coords, list) or len(coords) != 2:
+                            is_valid = False
+                        else:
+                            float(coords[0])
+                            float(coords[1])
+                    except Exception:
+                        is_valid = False
+
+            # ── LAT/LONG TEXT ────────────────────────────────
+            if rule.get("type") == "latlong_text":
+                if value:
+                    parts = re.split(r"[,\s]+", value.strip())
+                    try:
+                        if len(parts) != 2:
+                            is_valid = False
+                        else:
+                            float(parts[0])
+                            float(parts[1])
+                    except Exception:
+                        is_valid = False
+
+            # ── LATITUDE ─────────────────────────────────────
+            if rule.get("type") == "latitude":
+                if value:
+                    try:
+                        v = float(value)
+                        if not (-90 <= v <= 90):
+                            is_valid = False
+                    except ValueError:
+                        is_valid = False
+
+            # ── LONGITUDE ────────────────────────────────────
+            if rule.get("type") == "longitude":
+                if value:
+                    try:
+                        v = float(value)
+                        if not (-180 <= v <= 180):
+                            is_valid = False
+                    except ValueError:
+                        is_valid = False
+
+            # ── LENGTH CHECK ─────────────────────────────────
+            if "length" in rule:
+                if value and len(value) != rule["length"]:
+                    is_valid = False
+
+        if is_valid:
+            valid_rows.append(row)
+        else:
+            invalid_rows.append(row)
+
+    return pd.DataFrame(valid_rows), pd.DataFrame(invalid_rows)
+
+# =====================================================
+# USERNAME EXTRACTION — fully dynamic
+# Tries common username column names in order
+# =====================================================
+
+def extract_username(row):
+    possible_cols = ["createduser", "created user", "user name", "username", "operator"]
+    for col in possible_cols:
+        if col in row:
+            value = row[col]
+            if isinstance(value, str):
+                value = value.strip()
+            if value:
+                return value
+    return "UNKNOWN_USER"
+
+# =====================================================
+# VALIDATE FORM API — 100% dynamic, no hardcoding
+# =====================================================
+
+@app.post("/VALIDATE-FORM")
+async def validate_form(
+    file:      UploadFile = File(...),
+    form_type: str        = Form(...),
+    date:      str        = Form(...),
+    db:        Session    = Depends(get_db)
+):
+    form_type     = form_type.strip()
+    selected_date = pd.to_datetime(date, errors="coerce").date()
+
+    if not file.filename:
+        raise HTTPException(400, "No file uploaded")
+
+    if not file.filename.lower().endswith((".csv", ".xlsx", ".xls")):
+        raise HTTPException(400, "Invalid file format. Use CSV or Excel.")
+
+    # ── READ FILE ──────────────────────────────────────
+    try:
+        file_bytes = await file.read()
+
+        if len(file_bytes) == 0:
+            raise HTTPException(400, "Empty file")
+
+        file_stream = BytesIO(file_bytes)
+
+        if file.filename.lower().endswith(".csv"):
+            df = pd.read_csv(file_stream, dtype=str)
+        else:
+            df = pd.read_excel(file_stream, dtype=str, engine="openpyxl")
+
+        if len(df) == 0:
+            raise HTTPException(400, "File has no data rows")
+
+        df = safe_clean_df(df)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"File read error: {str(e)}")
+
+    # ── FETCH RULES FROM DB ────────────────────────────
+    try:
+        config = db.query(models.FormTemplate).filter(
+            models.FormTemplate.form_name == form_type
+        ).first()
+
+        if not config:
+            raise HTTPException(
+                400,
+                f"No validation rules found for '{form_type}'. "
+                f"Please create this form first from the Create Form page."
+            )
+
+        rules_dict        = json.loads(config.rules or "{}")
+        valid_df, junk_df = apply_dynamic_validation(df, rules_dict)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(400, f"Validation failed: {str(e)}")
+
+    valid_df = valid_df.copy()
+    junk_df  = junk_df.copy()
+
+    valid_df["status"] = "valid"
+    junk_df["status"]  = "invalid"
+
+    combined_df = pd.concat([valid_df, junk_df], ignore_index=True)
+
+    # ── DUPLICATE UPLOAD CHECK ─────────────────────────
+    previous_upload = db.query(models.UploadHistory).filter(
+        models.UploadHistory.form_type     == form_type,
+        models.UploadHistory.selected_date == str(selected_date)
+    ).first()
+
+    message = "File uploaded successfully"
+
+    if previous_upload:
+        message = "This form was uploaded before. Old data replaced."
+
+        db.query(models.FormEntry).filter(
+            models.FormEntry.form_type     == form_type,
+            models.FormEntry.selected_date == selected_date
+        ).delete()
+
+        db.query(models.UploadHistory).filter(
+            models.UploadHistory.form_type     == form_type,
+            models.UploadHistory.selected_date == str(selected_date)
+        ).delete()
+
+        db.commit()
+
+    # ── SAVE CSV FILES ─────────────────────────────────
+    file_id    = str(uuid.uuid4())
+    valid_file = os.path.join(UPLOAD_FOLDER, f"{file_id}_valid.csv")
+    junk_file  = os.path.join(UPLOAD_FOLDER, f"{file_id}_junk.csv")
+
+    valid_df.to_csv(valid_file, index=False)
+    junk_df.to_csv(junk_file,  index=False)
+
+    # ── DB INSERT ──────────────────────────────────────
+    try:
+        for _, row in combined_df.iterrows():
+            db.add(models.FormEntry(
+                form_type     = form_type,
+                username      = extract_username(row),
+                selected_date = selected_date,
+                row_status    = row.get("status", "invalid"),
+                circle        = str(row.get("circle", "UNKNOWN"))
+            ))
+
+        db.add(models.UploadHistory(
+            file_name     = file.filename,
+            form_type     = form_type,
+            selected_date = str(selected_date),
+            total_rows    = len(df),
+            valid_rows    = len(valid_df),
+            junk_rows     = len(junk_df),
+            valid_file    = valid_file,
+            junk_file     = junk_file
+        ))
+
+        db.commit()
+
+        return {
+            "status":     "success",
+            "message":    message,
+            "total_rows": len(df),
+            "valid_rows": len(valid_df),
+            "junk_rows":  len(junk_df)
+        }
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+
+
+# =====================================================
+# PYDANTIC MODEL
+# =====================================================
+
+class CreateFileRequest(PydanticBaseModel):
+    form_name: str
+    columns:   List[str]
+    rules:     Optional[Dict] = {}
+
+
+# =====================================================
+# SAVE FORM RULES
+# =====================================================
+
+@app.post("/SAVE-FORM-RULES")
+def save_form_rules(data: CreateFileRequest, db: Session = Depends(get_db)):
+    try:
+        existing = db.query(models.FormTemplate).filter(
+            models.FormTemplate.form_name == data.form_name
+        ).first()
+
+        if existing:
+            existing.columns = json.dumps(data.columns)
+            existing.rules   = json.dumps(data.rules)
+        else:
+            db.add(models.FormTemplate(
+                form_name = data.form_name,
+                columns   = json.dumps(data.columns),
+                rules     = json.dumps(data.rules),
+            ))
+
+        db.commit()
+        return {"status": "saved", "form_name": data.form_name}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, str(e))
+
+
+# =====================================================
+# GET ALL FORM NAMES — only from DB, no hardcoding
+# =====================================================
+
+@app.get("/GET-FORM-NAMES")
+def get_form_names(db: Session = Depends(get_db)):
+    return [r.form_name for r in db.query(models.FormTemplate).all()]
+
+
+# =====================================================
+# GET FORM RULES
+# =====================================================
+
+@app.get("/GET-FORM-RULES")
+def get_form_rules(form_name: str, db: Session = Depends(get_db)):
+    config = db.query(models.FormTemplate).filter(
+        models.FormTemplate.form_name == form_name
+    ).first()
+
+    if not config:
+        raise HTTPException(404, f"No rules found for form '{form_name}'")
+
+    return {
+        "form_name": config.form_name,
+        "columns":   json.loads(config.columns or "[]"),
+        "rules":     json.loads(config.rules    or "{}")
+    }
+
+
+# =====================================================
+# GET ALL FORM RULES
+# =====================================================
+
+@app.get("/GET-ALL-FORM-RULES")
+def get_all_form_rules(db: Session = Depends(get_db)):
+    templates = db.query(models.FormTemplate).all()
+    return {
+        t.form_name: {
+            "columns": json.loads(t.columns or "[]"),
+            "rules":   json.loads(t.rules    or "{}")
+        }
+        for t in templates
+    }
+
+
+# =====================================================
+# SITE MONITORING
+# =====================================================
+
+SITE_API_URL  = "https://cm.shrotitele.com/user_management/api/tpms-tracker/?api_key=MySecretKey@2025"
+ALARM_API_URL = "https://cm.shrotitele.com/user_management/alarm-data/"
+
+
+def fetch_all_sites():
+    try:
+        return requests.get(SITE_API_URL).json().get("data", [])
+    except Exception as e:
+        print("Site API Error:", e)
+        return []
+
+
+def fetch_alarm_data(start_date=None, end_date=None, imei=None):
+    params = {}
+    if start_date and end_date:
+        params["start_date"] = start_date
+        params["end_date"]   = end_date
+    if imei:
+        params["imei"] = imei
+    try:
+        return requests.get(ALARM_API_URL, params=params).json().get("data", [])
+    except Exception as e:
+        print("Alarm API Error:", e)
+        return []
+
+
+def build_site_monitoring(start_date=None, end_date=None):
+    sites  = fetch_all_sites()
+    alarms = fetch_alarm_data(start_date, end_date)
+
+    alarm_map = {}
+    for alarm in alarms:
+        imei = str(alarm.get("imei")).strip()
+        alarm_map.setdefault(imei, []).append(alarm)
+
+    up_sites   = []
+    down_sites = []
+
+    for site in sites:
+        imei      = str(site.get("gsm_imei_no")).strip()
+        site_name = site.get("site_name")
+        global_id = site.get("globel_id")
+
+        site_alarms = alarm_map.get(imei, [])
+
+        if site_alarms:
+            latest = sorted(site_alarms, key=lambda x: x.get("start_time", ""), reverse=True)[0]
+            down_sites.append({
+                "site_name": site_name,
+                "global_id": global_id,
+                "imei":      imei,
+                "status":    "DOWN",
+                "alarm":     latest.get("alarm_name"),
+                "since":     latest.get("start_time"),
+                "end_time":  latest.get("end_time")
+            })
+        else:
+            up_sites.append({
+                "site_name": site_name,
+                "global_id": global_id,
+                "imei":      imei,
+                "status":    "UP",
+                "since":     "Running"
+            })
+
+    return sites, up_sites, down_sites
+
+
+def save_site_monitoring_to_db(db: Session, up_sites, down_sites):
+    try:
+        db.query(models.SiteMonitoring).delete()
+
+        for site in up_sites:
+            db.add(models.SiteMonitoring(
+                site_name = site.get("site_name"),
+                global_id = site.get("global_id"),
+                circle    = "UNKNOWN",
+                status    = "Active",
+                alarm     = None,
+                since     = site.get("since"),
+                end_time  = None
+            ))
+
+        for site in down_sites:
+            db.add(models.SiteMonitoring(
+                site_name = site.get("site_name"),
+                global_id = site.get("global_id"),
+                circle    = "UNKNOWN",
+                status    = "Outage",
+                alarm     = site.get("alarm"),
+                since     = site.get("since"),
+                end_time  = site.get("end_time")
+            ))
+
+        db.commit()
+        print("✅ Site monitoring saved to DB")
+
+    except Exception as e:
+        db.rollback()
+        print("❌ DB Save Error:", str(e))
+
+
+@app.get("/SITE-MONITORING")
+def site_monitoring_api(
+    start_date: str = None,
+    end_date:   str = None,
+    db: Session = Depends(get_db)
+):
+    total, up, down = build_site_monitoring(start_date, end_date)
+    save_site_monitoring_to_db(db, up, down)
+    return {
+        "total_sites": len(total),
+        "up_sites":    len(up),
+        "down_sites":  len(down)
+    }
+
+
+@app.get("/SITE-DOWN")
+def site_down(start_date: str = None, end_date: str = None):
+    _, _, down = build_site_monitoring(start_date, end_date)
+    return down
+
+
+@app.get("/SITE-UP")
+def site_up(start_date: str = None, end_date: str = None):
+    _, up, _ = build_site_monitoring(start_date, end_date)
+    return up
+
+
+# =====================================================
+# ANALYTICS
+# =====================================================
+
+@app.get("/ANALYTICS")
+def get_analytics(
+    month: Optional[str] = Query(None),
+    db:    Session       = Depends(get_db)
+):
+    query = db.query(models.FormEntry)
+
+    if month:
+        try:
+            year, month_num = month.split("-")
+            query = query.filter(
+                extract("year",  models.FormEntry.selected_date) == int(year),
+                extract("month", models.FormEntry.selected_date) == int(month_num)
+            )
+        except:
+            pass
+
+    analytics = {}
+
+    for r in query.all():
+        username  = str(r.username  or "UNKNOWN_USER").strip()
+        form_type = str(r.form_type)
+        circle    = str(r.circle    or "UNKNOWN").strip()
+
+        analytics.setdefault(username, {"username": username, "forms": {}})
+        analytics[username]["forms"].setdefault(form_type, {
+            "valid": 0, "invalid": 0, "total": 0, "circleWise": {}
+        })
+
+        fd = analytics[username]["forms"][form_type]
+
+        if str(r.row_status).lower() == "valid":
+            fd["valid"] += 1
+        else:
+            fd["invalid"] += 1
+
+        fd["circleWise"].setdefault(circle, 0)
+        fd["circleWise"][circle] += 1
+
+    for username in analytics:
+        for form in analytics[username]["forms"]:
+            fd = analytics[username]["forms"][form]
+            fd["total"] = fd["valid"] + fd["invalid"]
+
+    return list(analytics.values())
+
+
+@app.get("/ATTENDANCE-STATUS")
+def get_attendance_status():
+    """Return {username: attendance_value} from the daily attendance file."""
+    import pandas as pd
+    att_path = os.path.join("data", "daily", "attendance.xlsx")
+    if not os.path.exists(att_path):
+        return {}
+    try:
+        df = pd.read_excel(att_path)
+        df.columns = df.columns.astype(str).str.strip()
+        cols = list(df.columns)
+
+        # Find username column
+        uname_col = next(
+            (c for c in cols if "username" in c.lower() or c.lower() == "user"),
+            cols[0]
+        )
+
+        # Find attendance column — by name first, then by value scan
+        PA_VALUES = {"p", "a", "present", "absent", "yes", "no"}
+        att_col = next(
+            (c for c in cols if any(kw in c.lower() for kw in ["attendance", "attn", "status", "present", "absent"])),
+            None
+        )
+        if not att_col:
+            best_col, best_score = None, -1
+            for c in cols:
+                if c == uname_col:
+                    continue
+                score = int(df[c].dropna().astype(str).str.strip().str.lower().isin(PA_VALUES).sum())
+                if score > best_score:
+                    best_score, best_col = score, c
+            if best_col and best_score > 0:
+                att_col = best_col
+
+        if not att_col:
+            return {}
+
+        result = {}
+        for _, row in df.iterrows():
+            uname = str(row.get(uname_col, "")).strip().lower()
+            val   = str(row.get(att_col,   "")).strip()
+            if uname and uname not in ("nan", "none", ""):
+                result[uname] = val
+        return result
+    except Exception as e:
+        print(f"[Attendance Status] Error: {e}")
+        return {}
+
+
+# =====================================================
+# FORM DATA FETCH
+# =====================================================
+
+@app.get("/FORM-DATA-MULTI")
+def get_form_data_multi(forms: str, db: Session = Depends(get_db)):
+    try:
+        if forms == "ALL":
+            results = db.query(models.FormEntry).order_by(models.FormEntry.id.desc()).all()
+        else:
+            form_list = [f.strip() for f in forms.split(",") if f.strip()]
+            results   = db.query(models.FormEntry)\
+                          .filter(models.FormEntry.form_type.in_(form_list))\
+                          .order_by(models.FormEntry.id.desc()).all()
+
+        return [
+            {
+                "form_type": r.form_type,
+                "username":  r.username,
+                "status":    r.row_status,
+                "date":      str(r.selected_date)
+            }
+            for r in results
+        ]
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# =====================================================
+# DASHBOARD DATA
+# =====================================================
+
+@app.get("/DASHBOARD-DATA")
+def get_dashboard_data(db: Session = Depends(get_db)):
+    data = db.query(models.UploadHistory).all()
+    return {
+        "total_forms": len(data),
+        "total_rows":  sum(e.total_rows or 0 for e in data),
+        "valid_rows":  sum(e.valid_rows  or 0 for e in data),
+        "junk_rows":   sum(e.junk_rows   or 0 for e in data)
+    }
+
+
+# =====================================================
+# DOWNLOAD FILE
+# =====================================================
+
+@app.get("/DOWNLOAD")
+async def download_file(path: str, filename: str = None):
+    if not os.path.exists(path):
+        raise HTTPException(404, "File not found")
+
+    display_name = filename if filename else os.path.basename(path)
+
+    if not display_name.lower().endswith(".xlsx"):
+        display_name += ".xlsx"
+
+    return FileResponse(
+        path,
+        filename   = display_name,
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+
+# =====================================================
+# UPLOAD HISTORY
+# =====================================================
+
+@app.get("/UPLOAD-HISTORY")
+def get_upload_history(db: Session = Depends(get_db)):
+    history = db.query(models.UploadHistory).order_by(models.UploadHistory.id.desc()).all()
+
+    return [
+        {
+            "file_name":   h.file_name,
+            "form_type":   h.form_type,
+            "upload_time": str(h.upload_time),
+            "total_rows":  h.total_rows or 0,
+            "valid_rows":  h.valid_rows  or 0,
+            "junk_rows":   h.junk_rows   or 0,
+        }
+        for h in history
+    ]
+
+
+# =====================================================
+# INVALID RECORDS
+# =====================================================
+
+@app.get("/INVALID-RECORDS")
+def get_invalid_records(form_name: str, db: Session = Depends(get_db)):
+    try:
+        # Get the most recent upload for this form
+        history = db.query(models.UploadHistory).filter(
+            models.UploadHistory.form_type == form_name
+        ).order_by(models.UploadHistory.id.desc()).first()
+
+        if not history:
+            return []
+
+        junk_file = history.junk_file
+
+        if not junk_file or not os.path.exists(junk_file):
+            return []
+
+        # Read the junk CSV
+        junk_df = pd.read_csv(junk_file, dtype=str).fillna("")
+
+        if len(junk_df) == 0:
+            return []
+
+        # Get the rules for this form to know what each column expects
+        config = db.query(models.FormTemplate).filter(
+            models.FormTemplate.form_name == form_name
+        ).first()
+
+        rules_dict = json.loads(config.rules or "{}") if config else {}
+
+        records = []
+
+        for idx, row in junk_df.iterrows():
+            # Skip the status column
+            row_data = {k: v for k, v in row.items() if k != "status"}
+            errors = []
+
+            for col, rule in rules_dict.items():
+                # Normalize column name same way as safe_clean_df
+                normalized_col = (
+                    col.strip().lower()
+                    .replace("\n", " ").replace("\r", "")
+                    .replace("_", " ").replace("-", " ")
+                )
+                normalized_col = re.sub(r"\s+", " ", normalized_col)
+
+                value = str(row.get(normalized_col, "")).strip()
+
+                reason = None
+
+                if rule.get("required") and not value:
+                    reason = f"'{col}' is required but empty"
+
+                elif rule.get("type") == "uuid" and value:
+                    try:
+                        import uuid as _uuid
+                        _uuid.UUID(value)
+                    except (ValueError, AttributeError):
+                        reason = f"'{value}' is not a valid UUID"
+
+                elif rule.get("type") == "username" and value:
+                    if not re.match(r"^[A-Za-z0-9._\-]{3,50}$", value):
+                        reason = f"'{value}' is not a valid username"
+
+                elif rule.get("type") == "system_id" and value:
+                    prefixes = [p.strip() for p in rule.get("allowed_prefixes", "").split(",") if p.strip()]
+                    if prefixes:
+                        if not any(value.upper().startswith(p.upper()) for p in prefixes):
+                            reason = f"'{value}' does not start with allowed prefix: {', '.join(prefixes)}"
+                    else:
+                        if not re.match(r"^[A-Za-z0-9]{1,10}(-[A-Za-z0-9]{1,10}){1,}$", value):
+                            reason = f"'{value}' is not a valid system ID (expected format: ABC-123)"
+
+                elif rule.get("type") == "number" and value:
+                    if not value.replace(".", "", 1).lstrip("-").isdigit():
+                        reason = f"'{value}' is not a valid number"
+                    else:
+                        try:
+                            n = float(value)
+                            mn = rule.get("min")
+                            mx = rule.get("max")
+                            if mn not in ("", None) and n < float(mn):
+                                reason = f"Value {value} is below minimum ({mn})"
+                            if mx not in ("", None) and n > float(mx):
+                                reason = f"Value {value} exceeds maximum ({mx})"
+                        except ValueError:
+                            reason = f"'{value}' could not be parsed as a number"
+
+                elif rule.get("type") == "meter_reading" and value:
+                    if not value.isdigit():
+                        reason = f"'{value}' is not a valid meter reading — expected a whole number"
+
+                elif rule.get("type") in ("datetime", "date") and value:
+                    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+                    if pd.isna(parsed):
+                        reason = f"'{value}' is not a valid date/time format"
+
+                elif rule.get("type") == "email" and value:
+                    if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", value):
+                        reason = f"'{value}' is not a valid email address"
+                    else:
+                        domains = [d.strip().lower() for d in rule.get("allowed_domains", "").split(",") if d.strip()]
+                        if domains and value.split("@", 1)[1].lower() not in domains:
+                            reason = f"'{value}' domain not in allowed: {', '.join(domains)}"
+
+                elif rule.get("type") == "phone" and value:
+                    digits = re.sub(r"\D", "", value)
+                    fmt = rule.get("phone_format", "any")
+                    if fmt == "india_10":
+                        if len(digits) != 10 or digits[0] not in "6789":
+                            reason = f"'{value}' is not a valid 10-digit Indian mobile number"
+                    elif fmt == "india_with_code":
+                        if not (len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"):
+                            reason = f"'{value}' is not a valid Indian number with country code"
+                    elif fmt == "international":
+                        if not (7 <= len(digits) <= 15):
+                            reason = f"'{value}' is not a valid international phone number"
+                    else:
+                        if len(digits) < 7:
+                            reason = f"'{value}' is not a valid phone number"
+
+                elif rule.get("type") == "pincode" and value:
+                    digits = re.sub(r"\D", "", value)
+                    fmt = rule.get("pincode_format", "any_numeric")
+                    if fmt == "india_6":
+                        if len(digits) != 6:
+                            reason = f"'{value}' is not a valid 6-digit Indian pincode"
+                    elif fmt == "us_zip":
+                        if len(digits) not in (5, 9):
+                            reason = f"'{value}' is not a valid US ZIP code"
+                    else:
+                        if not value.replace("-", "").isdigit() or len(digits) < 3:
+                            reason = f"'{value}' is not a valid pincode"
+
+                elif rule.get("type") in ("consumption", "inr_rate") and value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        float(cleaned)
+                    except ValueError:
+                        reason = f"'{value}' is not a valid numeric value"
+
+                elif rule.get("type") == "inr_amount" and value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        amt = float(cleaned)
+                        mn = rule.get("min")
+                        mx = rule.get("max")
+                        if mn not in ("", None) and amt < float(mn):
+                            reason = f"Amount {value} below minimum (₹{mn})"
+                        if mx not in ("", None) and amt > float(mx):
+                            reason = f"Amount {value} exceeds maximum (₹{mx})"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid amount"
+
+                elif rule.get("type") == "dropdown" and value:
+                    options_raw = rule.get("options", "")
+                    if options_raw:
+                        options = [o.strip().lower() for o in options_raw.split(",")]
+                        if value.lower() not in options:
+                            reason = f"'{value}' is not in allowed options: {options_raw}"
+
+                elif rule.get("type") == "approval_flag" and value:
+                    true_vals  = [v.strip().lower() for v in rule.get("true_values",  "").split(",") if v.strip()]
+                    false_vals = [v.strip().lower() for v in rule.get("false_values", "").split(",") if v.strip()]
+                    all_vals   = true_vals + false_vals
+                    if all_vals and value.lower() not in all_vals:
+                        reason = f"'{value}' is not a valid approval value — expected one of: {', '.join(all_vals)}"
+
+                elif rule.get("type") == "latitude" and value:
+                    try:
+                        v_float = float(value)
+                        if not (-90 <= v_float <= 90):
+                            reason = f"'{value}' is out of latitude range (-90 to 90)"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid latitude"
+
+                elif rule.get("type") == "longitude" and value:
+                    try:
+                        v_float = float(value)
+                        if not (-180 <= v_float <= 180):
+                            reason = f"'{value}' is out of longitude range (-180 to 180)"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid longitude"
+
+                elif rule.get("type") == "latlong_json" and value:
+                    try:
+                        geo = json.loads(value)
+                        coords = geo.get("coordinates")
+                        if not isinstance(coords, list) or len(coords) != 2:
+                            reason = f"Invalid lat/long JSON structure"
+                        else:
+                            float(coords[0]); float(coords[1])
+                    except Exception:
+                        reason = f"'{value}' is not valid lat/long JSON"
+
+                elif rule.get("type") == "latlong_text" and value:
+                    parts = re.split(r"[,\s]+", value.strip())
+                    try:
+                        if len(parts) != 2:
+                            reason = f"'{value}' must be two coordinates separated by comma/space"
+                        else:
+                            float(parts[0]); float(parts[1])
+                    except Exception:
+                        reason = f"'{value}' is not valid lat/long text"
+
+                if not reason and "length" in rule and value:
+                    if len(value) != rule["length"]:
+                        reason = f"'{value}' must be exactly {rule['length']} characters"
+
+                if reason:
+                    errors.append({"field": col, "reason": reason})
+
+            records.append({
+                "row": idx + 2,  # +2: 1-based + header row
+                "data": row_data,
+                "errors": errors
+            })
+
+        return records
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =====================================================
+# INVALID RECORDS BY USER
+# =====================================================
+
+def _resolve_junk_path(stored_path):
+    """Try multiple strategies to find the junk CSV on disk."""
+    if not stored_path:
+        return None
+    if os.path.exists(stored_path):
+        return stored_path
+    api_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(api_dir, stored_path)
+    if os.path.exists(candidate):
+        return candidate
+    filename = os.path.basename(stored_path)
+    candidate = os.path.join(api_dir, "uploads", filename)
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
+@app.get("/INVALID-RECORDS-BY-USER")
+def get_invalid_records_by_user(form_name: str, db: Session = Depends(get_db)):
+    try:
+        # Get most recent upload for this form
+        history = db.query(models.UploadHistory).filter(
+            models.UploadHistory.form_type == form_name
+        ).order_by(models.UploadHistory.id.desc()).first()
+
+        if not history or not history.junk_file:
+            return []
+
+        junk_path = _resolve_junk_path(history.junk_file)
+
+        if not junk_path:
+            # Junk file deleted — fall back to FormEntry for per-user counts
+            entries = db.query(models.FormEntry).filter(
+                models.FormEntry.form_type  == form_name,
+                models.FormEntry.row_status == "invalid"
+            ).all()
+            if not entries:
+                return []
+            user_counts = {}
+            for e in entries:
+                uname = (e.username or "Unknown User").strip() or "Unknown User"
+                user_counts[uname] = user_counts.get(uname, 0) + 1
+            return [
+                {
+                    "username":      uname,
+                    "total_invalid": cnt,
+                    "field_summary": [{
+                        "field":         "Details unavailable",
+                        "fail_count":    cnt,
+                        "sample_values": [],
+                        "reason":        "Raw data file was removed. Re-upload this form to restore field-level details.",
+                    }],
+                    "sample_errors": [],
+                    "raw_samples":   [],
+                }
+                for uname, cnt in sorted(user_counts.items(), key=lambda x: -x[1])
+            ]
+
+        junk_df = pd.read_csv(junk_path, dtype=str).fillna("")
+
+        if len(junk_df) == 0:
+            return []
+
+        # Get rules for this form
+        config = db.query(models.FormTemplate).filter(
+            models.FormTemplate.form_name == form_name
+        ).first()
+        rules_dict = json.loads(config.rules or "{}") if config else {}
+
+        # Try to find username column in junk_df
+        possible_user_cols = [
+            "createduser", "created user", "username",
+            "user name", "operator", "created by"
+        ]
+        user_col = None
+        for col in possible_user_cols:
+            if col in junk_df.columns:
+                user_col = col
+                break
+
+        # Build a slug→actual_col map for fuzzy column matching
+        col_slug_map = {re.sub(r"[\s._\-]+", "", c.lower()): c for c in junk_df.columns}
+
+        # Group invalid rows by user
+        user_map = {}
+
+        for idx, row in junk_df.iterrows():
+            # Get username
+            if user_col:
+                username = str(row.get(user_col, "")).strip() or "Unknown User"
+            else:
+                username = "Unknown User"
+
+            # Always register this row as invalid — it's in the junk file
+            user_map.setdefault(username, {
+                "username":      username,
+                "total_invalid": 0,
+                "field_summary": {},
+                "sample_errors": [],
+                "raw_samples":   [],
+            })
+            user_map[username]["total_invalid"] += 1
+
+            # Capture a raw sample row (up to 3 per user) as fallback display
+            if len(user_map[username]["raw_samples"]) < 3:
+                raw = {k: v for k, v in row.items() if k != "status" and v.strip()}
+                user_map[username]["raw_samples"].append({
+                    "row_number": int(idx) + 2,
+                    "data":       dict(list(raw.items())[:12]),
+                })
+
+            errors = []
+
+            for col, rule in rules_dict.items():
+                normalized_col = (
+                    col.strip().lower()
+                    .replace("\n", " ").replace("\r", "")
+                    .replace("_", " ").replace("-", " ")
+                )
+                normalized_col = re.sub(r"\s+", " ", normalized_col)
+
+                # Primary lookup; fall back to slug match when column names differ
+                value = str(row.get(normalized_col, "")).strip()
+                if not value:
+                    slug = re.sub(r"[\s._\-]+", "", normalized_col)
+                    actual_col = col_slug_map.get(slug, "")
+                    if actual_col:
+                        value = str(row.get(actual_col, "")).strip()
+
+                reason = None
+
+                if rule.get("required") and not value:
+                    reason = "Required field is empty"
+
+                elif rule.get("type") == "uuid" and value:
+                    try:
+                        import uuid as _uuid
+                        _uuid.UUID(value)
+                    except (ValueError, AttributeError):
+                        reason = f"'{value}' is not a valid UUID"
+
+                elif rule.get("type") == "username" and value:
+                    if not re.match(r"^[A-Za-z0-9._\-]{3,50}$", value):
+                        reason = f"'{value}' is not a valid username (3–50 alphanumeric/._- chars)"
+
+                elif rule.get("type") == "system_id" and value:
+                    prefixes = [p.strip() for p in rule.get("allowed_prefixes", "").split(",") if p.strip()]
+                    if prefixes:
+                        if not any(value.upper().startswith(p.upper()) for p in prefixes):
+                            reason = f"'{value}' does not start with allowed prefix: {', '.join(prefixes)}"
+                    else:
+                        if not re.match(r"^[A-Za-z0-9]{1,10}(-[A-Za-z0-9]{1,10}){1,}$", value):
+                            reason = f"'{value}' is not a valid system ID (expected format: ABC-123)"
+
+                elif rule.get("type") == "number" and value:
+                    if not value.replace(".", "", 1).lstrip("-").isdigit():
+                        reason = f"'{value}' is not a valid number"
+                    else:
+                        try:
+                            n = float(value)
+                            mn, mx = rule.get("min"), rule.get("max")
+                            if mn not in ("", None) and n < float(mn):
+                                reason = f"Value {value} is below minimum ({mn})"
+                            if mx not in ("", None) and n > float(mx):
+                                reason = f"Value {value} exceeds maximum ({mx})"
+                        except ValueError:
+                            reason = f"'{value}' could not be parsed as number"
+
+                elif rule.get("type") == "meter_reading" and value:
+                    if not value.isdigit():
+                        reason = f"'{value}' is not a valid meter reading"
+                    else:
+                        try:
+                            n = int(value)
+                            mn, mx = rule.get("min"), rule.get("max")
+                            if mn not in ("", None) and n < int(mn):
+                                reason = f"Value {value} is below minimum ({mn})"
+                            if mx not in ("", None) and n > int(mx):
+                                reason = f"Value {value} exceeds maximum ({mx})"
+                        except ValueError:
+                            pass
+
+                elif rule.get("type") in ("datetime", "date") and value:
+                    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+                    if pd.isna(parsed):
+                        reason = f"'{value}' is not a valid date format"
+
+                elif rule.get("type") == "email" and value:
+                    if not re.match(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$", value):
+                        reason = f"'{value}' is not a valid email"
+                    else:
+                        domains = [d.strip().lower() for d in rule.get("allowed_domains", "").split(",") if d.strip()]
+                        if domains and value.split("@", 1)[1].lower() not in domains:
+                            reason = f"'{value}' domain not in allowed: {', '.join(domains)}"
+
+                elif rule.get("type") == "phone" and value:
+                    digits = re.sub(r"\D", "", value)
+                    fmt = rule.get("phone_format", "any")
+                    if fmt == "india_10":
+                        if len(digits) != 10 or digits[0] not in "6789":
+                            reason = f"'{value}' is not a valid 10-digit Indian mobile number"
+                    elif fmt == "india_with_code":
+                        if not (len(digits) == 12 and digits.startswith("91") and digits[2] in "6789"):
+                            reason = f"'{value}' is not a valid Indian number with country code"
+                    elif fmt == "international":
+                        if not (7 <= len(digits) <= 15):
+                            reason = f"'{value}' is not a valid international phone number"
+                    else:
+                        if len(digits) < 7:
+                            reason = f"'{value}' is not a valid phone number"
+
+                elif rule.get("type") == "pincode" and value:
+                    digits = re.sub(r"\D", "", value)
+                    fmt = rule.get("pincode_format", "any_numeric")
+                    if fmt == "india_6":
+                        if len(digits) != 6:
+                            reason = f"'{value}' is not a valid 6-digit Indian pincode"
+                    elif fmt == "us_zip":
+                        if len(digits) not in (5, 9):
+                            reason = f"'{value}' is not a valid US ZIP code"
+                    else:
+                        if not value.replace("-", "").isdigit() or len(digits) < 3:
+                            reason = f"'{value}' is not a valid pincode"
+
+                elif rule.get("type") in ("consumption", "inr_rate") and value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        float(cleaned)
+                    except ValueError:
+                        reason = f"'{value}' is not a valid numeric value"
+
+                elif rule.get("type") == "inr_amount" and value:
+                    cleaned = value.replace("₹", "").replace(",", "").strip()
+                    try:
+                        amt = float(cleaned)
+                        mn, mx = rule.get("min"), rule.get("max")
+                        if mn not in ("", None) and amt < float(mn):
+                            reason = f"Amount {value} below minimum (₹{mn})"
+                        if mx not in ("", None) and amt > float(mx):
+                            reason = f"Amount {value} exceeds maximum (₹{mx})"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid amount"
+
+                elif rule.get("type") == "dropdown" and value:
+                    options_raw = rule.get("options", "")
+                    if options_raw:
+                        options = [o.strip().lower() for o in options_raw.split(",")]
+                        if value.lower() not in options:
+                            reason = f"'{value}' not in allowed options: {options_raw}"
+
+                elif rule.get("type") == "approval_flag" and value:
+                    true_vals  = [v.strip().lower() for v in rule.get("true_values",  "").split(",") if v.strip()]
+                    false_vals = [v.strip().lower() for v in rule.get("false_values", "").split(",") if v.strip()]
+                    all_vals   = true_vals + false_vals
+                    if all_vals and value.lower() not in all_vals:
+                        reason = f"'{value}' not valid — expected: {', '.join(all_vals)}"
+
+                elif rule.get("type") == "latitude" and value:
+                    try:
+                        v_float = float(value)
+                        if not (-90 <= v_float <= 90):
+                            reason = f"'{value}' out of latitude range"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid latitude"
+
+                elif rule.get("type") == "longitude" and value:
+                    try:
+                        v_float = float(value)
+                        if not (-180 <= v_float <= 180):
+                            reason = f"'{value}' out of longitude range"
+                    except ValueError:
+                        reason = f"'{value}' is not a valid longitude"
+
+                elif rule.get("type") == "latlong_json" and value:
+                    try:
+                        geo = json.loads(value)
+                        coords = geo.get("coordinates")
+                        if not isinstance(coords, list) or len(coords) != 2:
+                            reason = f"Invalid lat/long JSON structure"
+                        else:
+                            float(coords[0]); float(coords[1])
+                    except Exception:
+                        reason = f"'{value}' is not valid lat/long JSON"
+
+                elif rule.get("type") == "latlong_text" and value:
+                    parts = re.split(r"[,\s]+", value.strip())
+                    try:
+                        if len(parts) != 2:
+                            reason = f"'{value}' must be two coordinates separated by comma/space"
+                        else:
+                            float(parts[0]); float(parts[1])
+                    except Exception:
+                        reason = f"'{value}' is not valid lat/long text"
+
+                if not reason and "length" in rule and value:
+                    if len(value) != rule["length"]:
+                        reason = f"'{value}' must be exactly {rule['length']} characters"
+
+                if reason:
+                    errors.append({
+                        "field":  col,
+                        "value":  value,
+                        "reason": reason
+                    })
+
+            if errors:
+                # Field-level summary — count how many times each field failed
+                for err in errors:
+                    field = err["field"]
+                    user_map[username]["field_summary"].setdefault(
+                        field, {"count": 0, "sample_values": []}
+                    )
+                    user_map[username]["field_summary"][field]["count"] += 1
+                    samples = user_map[username]["field_summary"][field]["sample_values"]
+                    if len(samples) < 5 and err["value"] not in samples:
+                        samples.append(err["value"])
+
+                # Keep max 3 full sample error rows per user for preview
+                if len(user_map[username]["sample_errors"]) < 3:
+                    user_map[username]["sample_errors"].append({
+                        "row_number": int(idx) + 2,
+                        "errors":     errors
+                    })
+
+        # Convert field_summary dict to sorted list
+        result = []
+        for username, data in user_map.items():
+            field_summary_list = sorted(
+                [
+                    {
+                        "field":         field,
+                        "fail_count":    info["count"],
+                        "sample_values": info["sample_values"],
+                        "reason":        f"Failed {info['count']} time(s)"
+                    }
+                    for field, info in data["field_summary"].items()
+                ],
+                key=lambda x: x["fail_count"],
+                reverse=True
+            )
+
+            # Fallback: if no specific field errors found, show raw row data summary
+            if not field_summary_list:
+                field_summary_list = [{
+                    "field":         "Validation failed",
+                    "fail_count":    data["total_invalid"],
+                    "sample_values": [],
+                    "reason":        "Records did not pass validation — specific field details below",
+                }]
+
+            result.append({
+                "username":      username,
+                "total_invalid": data["total_invalid"],
+                "field_summary": field_summary_list,
+                "sample_errors": data["sample_errors"],
+                "raw_samples":   data.get("raw_samples", []),
+            })
+
+        # Sort by most invalid entries first
+        result.sort(key=lambda x: x["total_invalid"], reverse=True)
+        return result
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch user invalid records: {str(e)}")
+
+
+# =====================================================
+# REVALIDATE FORM — re-runs validation on stored records
+# using the current rules (called after a rule change)
+# =====================================================
+
+@app.post("/REVALIDATE-FORM")
+def revalidate_form(body: dict, db: Session = Depends(get_db)):
+    form_name = (body.get("form_name") or "").strip()
+
+    if not form_name:
+        raise HTTPException(400, "form_name is required")
+
+    # 1. Load current rules
+    config = db.query(models.FormTemplate).filter(
+        models.FormTemplate.form_name == form_name
+    ).first()
+
+    if not config:
+        raise HTTPException(404, f"No form template found for '{form_name}'")
+
+    rules_dict = json.loads(config.rules or "{}")
+
+    # 2. Find all upload history records for this form
+    uploads = db.query(models.UploadHistory).filter(
+        models.UploadHistory.form_type == form_name
+    ).all()
+
+    if not uploads:
+        return {"status": "ok", "message": "No uploaded records to revalidate", "updated": 0}
+
+    total_revalidated = 0
+
+    for upload in uploads:
+        valid_path = upload.valid_file
+        junk_path  = upload.junk_file
+
+        # Skip if CSV files are missing
+        if not valid_path or not junk_path:
+            continue
+        if not os.path.exists(valid_path) or not os.path.exists(junk_path):
+            continue
+
+        # 3. Reconstruct the original data by combining valid + junk CSVs
+        valid_df = pd.read_csv(valid_path, dtype=str).fillna("")
+        junk_df  = pd.read_csv(junk_path,  dtype=str).fillna("")
+
+        # Drop the status column added during validation
+        for df in (valid_df, junk_df):
+            if "status" in df.columns:
+                df.drop(columns=["status"], inplace=True)
+
+        combined_df = pd.concat([valid_df, junk_df], ignore_index=True)
+
+        if len(combined_df) == 0:
+            continue
+
+        # 4. Re-run validation with current rules
+        new_valid_df, new_junk_df = apply_dynamic_validation(combined_df, rules_dict)
+
+        new_valid_df = new_valid_df.copy()
+        new_junk_df  = new_junk_df.copy()
+
+        new_valid_df["status"] = "valid"
+        new_junk_df["status"]  = "invalid"
+
+        # 5. Overwrite the CSV files
+        new_valid_df.to_csv(valid_path, index=False)
+        new_junk_df.to_csv(junk_path,   index=False)
+
+        # 6. Update UploadHistory counts
+        upload.valid_rows = len(new_valid_df)
+        upload.junk_rows  = len(new_junk_df)
+
+        # 7. Re-build FormEntry rows for this upload's date
+        selected_date = upload.selected_date
+        db.query(models.FormEntry).filter(
+            models.FormEntry.form_type     == form_name,
+            models.FormEntry.selected_date == selected_date
+        ).delete()
+
+        new_combined = pd.concat([new_valid_df, new_junk_df], ignore_index=True)
+        for _, row in new_combined.iterrows():
+            db.add(models.FormEntry(
+                form_type     = form_name,
+                username      = extract_username(row),
+                selected_date = selected_date,
+                row_status    = row.get("status", "invalid"),
+                circle        = str(row.get("circle", "UNKNOWN"))
+            ))
+
+        total_revalidated += len(new_combined)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"DB commit failed: {str(e)}")
+
+    return {
+        "status":      "ok",
+        "form_name":   form_name,
+        "uploads":     len(uploads),
+        "revalidated": total_revalidated
+    }
+
+
+# =====================================================
+# VALID RECORDS BY USER
+# =====================================================
+
+@app.get("/VALID-RECORDS-BY-USER")
+def get_valid_records_by_user(form_name: str, db: Session = Depends(get_db)):
+    try:
+        history = db.query(models.UploadHistory).filter(
+            models.UploadHistory.form_type == form_name
+        ).order_by(models.UploadHistory.id.desc()).first()
+
+        if not history or not history.valid_file:
+            return []
+
+        # Robust path resolution
+        valid_path = None
+        for candidate in [
+            history.valid_file,
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), history.valid_file),
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", os.path.basename(history.valid_file)),
+        ]:
+            if candidate and os.path.exists(candidate):
+                valid_path = candidate
+                break
+
+        if not valid_path:
+            # Fall back to FormEntry counts only
+            entries = db.query(models.FormEntry).filter(
+                models.FormEntry.form_type  == form_name,
+                models.FormEntry.row_status == "valid"
+            ).all()
+            if not entries:
+                return []
+            user_counts = {}
+            for e in entries:
+                uname = (e.username or "Unknown User").strip() or "Unknown User"
+                user_counts[uname] = user_counts.get(uname, 0) + 1
+            return [
+                {"username": uname, "total_valid": cnt, "sample_rows": []}
+                for uname, cnt in sorted(user_counts.items(), key=lambda x: -x[1])
+            ]
+
+        valid_df = pd.read_csv(valid_path, dtype=str).fillna("")
+
+        if len(valid_df) == 0:
+            return []
+
+        possible_user_cols = [
+            "createduser", "created user", "username",
+            "user name", "operator", "created by"
+        ]
+        user_col = None
+        for col in possible_user_cols:
+            if col in valid_df.columns:
+                user_col = col
+                break
+
+        user_map = {}
+
+        for idx, row in valid_df.iterrows():
+            username = str(row.get(user_col, "")).strip() or "Unknown User" if user_col else "Unknown User"
+
+            user_map.setdefault(username, {"total_valid": 0, "sample_rows": []})
+            user_map[username]["total_valid"] += 1
+
+            if len(user_map[username]["sample_rows"]) < 3:
+                row_data = {k: v for k, v in row.items() if k != "status" and str(v).strip()}
+                user_map[username]["sample_rows"].append({
+                    "row_number": int(idx) + 2,
+                    "data":       dict(list(row_data.items())[:12]),
+                })
+
+        result = [
+            {"username": uname, "total_valid": data["total_valid"], "sample_rows": data["sample_rows"]}
+            for uname, data in user_map.items()
+        ]
+        result.sort(key=lambda x: x["total_valid"], reverse=True)
+        return result
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch user valid records: {str(e)}")
+
+
+@app.get("/USER-FORM-RECORDS")
+def get_user_form_records(
+    username:  str,
+    form_name: str,
+    status:    str,          # "valid" or "invalid"
+    db: Session = Depends(get_db),
+):
+    """Return every row for a specific user + form + status from the stored CSV."""
+    try:
+        history = db.query(models.UploadHistory).filter(
+            models.UploadHistory.form_type == form_name
+        ).order_by(models.UploadHistory.id.desc()).first()
+
+        if not history:
+            return {"total": 0, "columns": [], "rows": []}
+
+        raw_path = history.junk_file if status == "invalid" else history.valid_file
+        if not raw_path:
+            return {"total": 0, "columns": [], "rows": []}
+
+        # Resolve path robustly
+        api_dir   = os.path.dirname(os.path.abspath(__file__))
+        file_path = None
+        for candidate in [
+            raw_path,
+            os.path.join(api_dir, raw_path),
+            os.path.join(api_dir, "uploads", os.path.basename(raw_path)),
+        ]:
+            if candidate and os.path.exists(candidate):
+                file_path = candidate
+                break
+
+        if not file_path:
+            return {"total": 0, "columns": [], "rows": []}
+
+        df = pd.read_csv(file_path, dtype=str).fillna("")
+
+        # Find username column
+        possible_user_cols = [
+            "createduser", "created user", "username",
+            "user name", "operator", "created by",
+        ]
+        user_col = next((c for c in possible_user_cols if c in df.columns), None)
+
+        # Filter rows to this user
+        if user_col:
+            df = df[df[user_col].str.strip().str.lower() == username.strip().lower()]
+
+        # Drop internal housekeeping columns
+        drop = {"status", "row_status", "junk_reason", "_status"}
+        df   = df[[c for c in df.columns if c.lower() not in drop]]
+
+        columns = list(df.columns)
+        rows = [
+            {"row_number": int(idx) + 2, "data": dict(row)}
+            for idx, row in df.iterrows()
+        ]
+        return {"total": len(rows), "columns": columns, "rows": rows}
+
+    except Exception as e:
+        raise HTTPException(500, f"Failed to fetch user form records: {str(e)}")
+
+
+# =====================================================
+# SITE DASHBOARD — CSV-based endpoints
+# =====================================================
+
+SITE_STATUS_CSV = os.path.join("data", "Site_Status.csv")
+
+def find_alarm_csv():
+    """Find the latest Alarm_Report CSV in the data/ folder."""
+    matches = sorted(f for f in os.listdir("data") if f.startswith("Alarm_Report") and f.endswith(".csv"))
+    if not matches:
+        raise HTTPException(404, "Alarm_Report CSV not found in data/ folder")
+    return os.path.join("data", matches[-1])
+
+
+def load_site_status():
+    df = pd.read_csv(SITE_STATUS_CSV, dtype=str).fillna("")
+    df.columns = df.columns.str.strip()
+    return df
+
+
+def load_alarm_report():
+    path = find_alarm_csv()
+    df = pd.read_csv(path, dtype=str).fillna("")
+    df.columns = df.columns.str.strip()
+    return df
+
+
+def filter_alarm_by_days(df: pd.DataFrame, days: int) -> pd.DataFrame:
+    """Filter alarm rows to the last `days` days relative to the newest record in the data."""
+    dt = pd.to_datetime(df["Alarm Start Time"], errors="coerce")
+    max_dt = dt.max()
+    if pd.isna(max_dt):
+        return df
+    cutoff = max_dt - pd.Timedelta(days=days)
+    return df[dt >= cutoff].reset_index(drop=True)
+
+
+def parse_duration_to_minutes(duration_str: str) -> float:
+    """Convert HH:MM:SS string to total minutes. Returns 0 on parse failure."""
+    try:
+        parts = str(duration_str).strip().split(":")
+        if len(parts) == 3:
+            h, m, s = int(parts[0]), int(parts[1]), float(parts[2])
+            return h * 60 + m + s / 60
+    except Exception:
+        pass
+    return 0.0
+
+
+@app.get("/SITE-DASHBOARD-STATS")
+def site_dashboard_stats(days: int = Query(7)):
+    try:
+        site_df  = load_site_status()
+        alarm_df = filter_alarm_by_days(load_alarm_report(), days)
+
+        total_active_sites  = len(site_df)
+        total_alarm_events  = len(alarm_df)
+        unique_alarm_sites  = alarm_df["Global ID"].replace("", pd.NA).dropna().nunique()
+        circles_affected    = alarm_df["State/Circle"].replace("", pd.NA).dropna().nunique()
+
+        durations = alarm_df["Duration (HH:MM:SS)"].apply(parse_duration_to_minutes)
+        avg_alarm_duration_minutes = round(durations.mean(), 2) if len(durations) > 0 else 0
+
+        return {
+            "total_active_sites":        total_active_sites,
+            "total_alarm_events":        total_alarm_events,
+            "unique_alarm_sites":        int(unique_alarm_sites),
+            "circles_affected":          int(circles_affected),
+            "avg_alarm_duration_minutes": avg_alarm_duration_minutes,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ABSENT-STATS")
+def site_absent_stats():
+    """
+    Returns absent site count (sites marked as Down/Outage from site monitoring).
+    This is separate from the attendance file for field staff.
+    """
+    try:
+        db = SessionLocal()
+        down_sites = db.query(models.SiteMonitoring).filter(
+            models.SiteMonitoring.status == "Outage"
+        ).count()
+        total_sites = db.query(models.SiteMonitoring).count()
+        return {
+            "total_sites":    total_sites,
+            "down_sites":     down_sites,
+            "active_sites":   total_sites - down_sites
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+
+@app.get("/SITE-DOWN-LIST")
+def site_down_list():
+    """Returns list of sites currently down/outage."""
+    try:
+        db = SessionLocal()
+        down_sites = db.query(models.SiteMonitoring).filter(
+            models.SiteMonitoring.status == "Outage"
+        ).all()
+        return [
+            {
+                "site_name": s.site_name,
+                "global_id": s.global_id,
+                "circle":    s.circle,
+                "alarm":     s.alarm,
+                "since":     s.since
+            }
+            for s in down_sites
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    finally:
+        db.close()
+
+
+@app.get("/SITE-ACTIVE-LIST")
+def site_active_list():
+    try:
+        df = load_site_status()
+        df = df.rename(columns={
+            "S.No.":             "s_no",
+            "Site ID":           "site_id",
+            "Site Name":         "site_name",
+            "State/Circle":      "circle",
+            "H1":                "h1",
+            "H2":                "h2",
+            "ID":                "id",
+            "IMEI No":           "imei_no",
+            "Mobile No":         "mobile_no",
+            "I&C Date":          "ic_date",
+            "Battery":           "battery",
+            "Battery (V)":       "battery_v",
+            "Temp":              "temp",
+            "Signal (dBm)":      "signal_dbm",
+            "Last Communication":"last_communication",
+            "Aging":             "aging",
+        })
+        return df.to_dict(orient="records")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ALARM-LIST")
+def site_alarm_list(days: int = Query(7)):
+    try:
+        df = filter_alarm_by_days(load_alarm_report(), days)
+        df = df.rename(columns={
+            "S.No.":                "s_no",
+            "Global ID":            "global_id",
+            "Site Name":            "site_name",
+            "State/Circle":         "circle",
+            "District":             "district",
+            "Cluster":              "cluster",
+            "Alarm On-Site":        "alarm_type",
+            "Alarm Start Time":     "alarm_start_time",
+            "Alarm End Time":       "alarm_end_time",
+            "Duration (HH:MM:SS)":  "duration",
+            "Battery Start Volt":   "battery_start_v",
+            "Battery End Volt":     "battery_end_v",
+            "Temp.":                "temp",
+            "IMEI":                 "imei",
+            "Site Running ON":      "site_running_on",
+            "Energy Start Time":    "energy_start_time",
+            "Energy End Time":      "energy_end_time",
+            "Acknowledge":          "acknowledge",
+        })
+        return df.to_dict(orient="records")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ALARM-TREND")
+def site_alarm_trend(days: int = Query(7)):
+    try:
+        df = filter_alarm_by_days(load_alarm_report(), days)
+        df["_date"] = pd.to_datetime(
+            df["Alarm Start Time"], errors="coerce"
+        ).dt.date.astype(str)
+        df = df[df["_date"].notna() & (df["_date"] != "NaT") & (df["_date"] != "")]
+        trend = (
+            df.groupby("_date")
+            .size()
+            .reset_index(name="count")
+            .sort_values("_date")
+        )
+        return [
+            {"date": row["_date"], "count": int(row["count"])}
+            for _, row in trend.iterrows()
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ALARM-BY-TYPE")
+def site_alarm_by_type(days: int = Query(7)):
+    try:
+        df = filter_alarm_by_days(load_alarm_report(), days)
+        df = df[df["Alarm On-Site"].replace("", pd.NA).notna()]
+        result = (
+            df.groupby("Alarm On-Site")
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        return [
+            {"alarm_type": row["Alarm On-Site"], "count": int(row["count"])}
+            for _, row in result.iterrows()
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ALARM-BY-CIRCLE")
+def site_alarm_by_circle(days: int = Query(7)):
+    try:
+        df = filter_alarm_by_days(load_alarm_report(), days)
+        col = next((c for c in df.columns if "circle" in c.lower() or "state" in c.lower()), None)
+        if not col:
+            return []
+        df = df[df[col].replace("", pd.NA).notna()]
+        result = (
+            df.groupby(col)
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        return [
+            {"circle": row[col], "count": int(row["count"])}
+            for _, row in result.iterrows()
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-ACTIVE-BY-CIRCLE")
+def site_active_by_circle():
+    try:
+        df = load_site_status()
+        col = next((c for c in df.columns if "circle" in c.lower() or "state" in c.lower()), None)
+        if not col:
+            return []
+        df = df[df[col].replace("", pd.NA).notna()]
+        result = (
+            df.groupby(col)
+            .size()
+            .reset_index(name="count")
+            .sort_values("count", ascending=False)
+        )
+        return [
+            {"circle": row[col], "count": int(row["count"])}
+            for _, row in result.iterrows()
+        ]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+
+class SendReportBody(PydanticBaseModel):
+    extra_recipients: List[str] = []
+
+@app.post("/SEND-DAILY-REPORT")
+def trigger_send_daily_report(
+    test_mode:   bool = False,
+    report_date: str  = None,
+    body: SendReportBody = SendReportBody(),
+):
+    """
+    Manually triggers the daily report send.
+    ?test_mode=true       → sends only to TEST_RECIPIENTS.
+    ?report_date=YYYY-MM-DD → overrides the date shown in the report (default: today).
+    body.extra_recipients → ad-hoc CCs added only for this send.
+    """
+    from services.notification_service import send_report_now
+    result = send_report_now(
+        test_mode=test_mode,
+        extra_recipients=body.extra_recipients or None,
+        report_date=report_date,
+    )
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "Failed to send report"))
+    msg = "Test reports sent to test recipients only." if test_mode else "Daily reports sent successfully."
+    return {"status": "success", "message": msg}
+
+
+# =====================================================
+# RECIPIENTS CONFIGURATION — circle heads + extra CCs
+# =====================================================
+
+class CircleHeadBody(PydanticBaseModel):
+    circle: str
+    head:   str
+    email:  str
+    phone:  str = ""
+
+class ManagerBody(PydanticBaseModel):
+    name:   str
+    email:  str
+    circle: str = ""
+
+class ManagementRecipientBody(PydanticBaseModel):
+    name:  str
+    email: str
+
+class ExtraRecipientsBody(PydanticBaseModel):
+    emails: List[str]
+
+@app.get("/REPORTING-CONFIG")
+def get_reporting_config():
+    from services.notification_service import _read_config, CIRCLE_HEADS, get_extra_recipients
+    cfg = _read_config()
+    # Seed from hardcoded if config file has no circle_heads yet
+    if not cfg.get("circle_heads"):
+        cfg["circle_heads"] = [
+            {"circle": k, "head": v["head"], "email": v["email"], "phone": v.get("phone", "")}
+            for k, v in CIRCLE_HEADS.items()
+        ]
+    cfg.setdefault("extra_recipients", [])
+    cfg.setdefault("managers", [])
+    cfg.setdefault("management_recipients", [])
+    return cfg
+
+@app.post("/REPORTING-CONFIG/CIRCLE-HEADS")
+def add_circle_head(body: CircleHeadBody):
+    from services.notification_service import _read_config, _write_config, CIRCLE_HEADS
+    cfg = _read_config()
+    if not cfg.get("circle_heads"):
+        cfg["circle_heads"] = [
+            {"circle": k, "head": v["head"], "email": v["email"], "phone": v.get("phone", "")}
+            for k, v in CIRCLE_HEADS.items()
+        ]
+    if any(ch["circle"] == body.circle for ch in cfg["circle_heads"]):
+        raise HTTPException(400, f"Circle '{body.circle}' already exists. Use PUT to update.")
+    cfg["circle_heads"].append(body.dict())
+    _write_config(cfg)
+    return {"status": "ok", "circle_heads": cfg["circle_heads"]}
+
+@app.put("/REPORTING-CONFIG/CIRCLE-HEADS/{circle}")
+def update_circle_head(circle: str, body: CircleHeadBody):
+    from services.notification_service import _read_config, _write_config, CIRCLE_HEADS
+    cfg = _read_config()
+    if not cfg.get("circle_heads"):
+        cfg["circle_heads"] = [
+            {"circle": k, "head": v["head"], "email": v["email"], "phone": v.get("phone", "")}
+            for k, v in CIRCLE_HEADS.items()
+        ]
+    cfg["circle_heads"] = [
+        body.dict() if ch["circle"] == circle else ch
+        for ch in cfg["circle_heads"]
+    ]
+    _write_config(cfg)
+    return {"status": "ok", "circle_heads": cfg["circle_heads"]}
+
+@app.delete("/REPORTING-CONFIG/CIRCLE-HEADS/{circle}")
+def delete_circle_head(circle: str):
+    from services.notification_service import _read_config, _write_config, CIRCLE_HEADS
+    cfg = _read_config()
+    if not cfg.get("circle_heads"):
+        cfg["circle_heads"] = [
+            {"circle": k, "head": v["head"], "email": v["email"], "phone": v.get("phone", "")}
+            for k, v in CIRCLE_HEADS.items()
+        ]
+    cfg["circle_heads"] = [ch for ch in cfg["circle_heads"] if ch["circle"] != circle]
+    _write_config(cfg)
+    return {"status": "ok", "circle_heads": cfg["circle_heads"]}
+
+@app.post("/REPORTING-CONFIG/MANAGERS")
+def add_manager(body: ManagerBody):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg.setdefault("managers", [])
+    if any(m["name"] == body.name for m in cfg["managers"]):
+        raise HTTPException(400, f"Manager '{body.name}' already exists. Use PUT to update.")
+    cfg["managers"].append(body.dict())
+    _write_config(cfg)
+    return {"status": "ok", "managers": cfg["managers"]}
+
+@app.put("/REPORTING-CONFIG/MANAGERS/{name}")
+def update_manager(name: str, body: ManagerBody):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg.setdefault("managers", [])
+    cfg["managers"] = [body.dict() if m["name"] == name else m for m in cfg["managers"]]
+    _write_config(cfg)
+    return {"status": "ok", "managers": cfg["managers"]}
+
+@app.delete("/REPORTING-CONFIG/MANAGERS/{name}")
+def delete_manager(name: str):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg.setdefault("managers", [])
+    cfg["managers"] = [m for m in cfg["managers"] if m["name"] != name]
+    _write_config(cfg)
+    return {"status": "ok", "managers": cfg["managers"]}
+
+@app.put("/REPORTING-CONFIG/EXTRA-RECIPIENTS")
+def update_extra_recipients(body: ExtraRecipientsBody):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg["extra_recipients"] = [e.strip() for e in body.emails if e.strip()]
+    _write_config(cfg)
+    return {"status": "ok", "extra_recipients": cfg["extra_recipients"]}
+
+@app.get("/REPORTING-CONFIG/MANAGEMENT")
+def get_management_recipients_config():
+    from services.notification_service import _read_config
+    return {"management_recipients": _read_config().get("management_recipients", [])}
+
+@app.post("/REPORTING-CONFIG/MANAGEMENT")
+def add_management_recipient(body: ManagementRecipientBody):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg.setdefault("management_recipients", [])
+    if any(r["email"] == body.email for r in cfg["management_recipients"]):
+        raise HTTPException(400, f"'{body.email}' already in management recipients.")
+    cfg["management_recipients"].append(body.dict())
+    _write_config(cfg)
+    return {"status": "ok", "management_recipients": cfg["management_recipients"]}
+
+@app.delete("/REPORTING-CONFIG/MANAGEMENT/{email:path}")
+def delete_management_recipient(email: str):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg["management_recipients"] = [
+        r for r in cfg.get("management_recipients", []) if r["email"] != email
+    ]
+    _write_config(cfg)
+    return {"status": "ok", "management_recipients": cfg["management_recipients"]}
+
+@app.get("/REPORTING-CONFIG/TEST-MODE")
+def get_test_mode_status():
+    from services.notification_service import _read_config
+    cfg = _read_config()
+    return {
+        "test_mode":  cfg.get("test_mode",  True),
+        "test_email": cfg.get("test_email", "pranjalg.work@gmail.com"),
+    }
+
+@app.put("/REPORTING-CONFIG/TEST-MODE")
+def set_test_mode(body: dict):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg["test_mode"]  = bool(body.get("test_mode", True))
+    if "test_email" in body:
+        cfg["test_email"] = str(body["test_email"]).strip()
+    _write_config(cfg)
+    state = "ON" if cfg["test_mode"] else "OFF"
+    print(f"[Mail] Test mode {state} — all emails → {cfg.get('test_email', 'pranjalg.work@gmail.com')}")
+    return {"test_mode": cfg["test_mode"], "test_email": cfg.get("test_email", "pranjalg.work@gmail.com")}
+
+@app.get("/REPORTING-CONFIG/MAIL-STATUS")
+def get_mail_status():
+    from services.notification_service import _read_config
+    cfg = _read_config()
+    return {"mail_enabled": cfg.get("mail_enabled", True)}
+
+@app.put("/REPORTING-CONFIG/MAIL-STATUS")
+def set_mail_status(body: dict):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg["mail_enabled"] = bool(body.get("mail_enabled", True))
+    _write_config(cfg)
+    status = "enabled" if cfg["mail_enabled"] else "disabled"
+    print(f"[Mail] Mail sending {status} via portal.")
+    return {"mail_enabled": cfg["mail_enabled"]}
+
+
+@app.get("/PREVIEW-RECIPIENTS")
+def preview_recipients():
+    """Returns who would receive each email type based on uploaded files."""
+    from services.notification_service import get_recipients_preview
+    result = get_recipients_preview()
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "Could not build recipient list"))
+    return result
+
+
+@app.post("/SEND-TEST-REPORT/{report_type}")
+def trigger_send_test_report(report_type: str, report_date: str = None):
+    """
+    Sends a single report type as a test to TEST_RECIPIENTS only.
+    report_type: "management" | "circles" | "managers"
+    ?report_date=YYYY-MM-DD → overrides the date shown in the report (default: today).
+    """
+    valid = {"management", "circles", "managers"}
+    if report_type not in valid:
+        raise HTTPException(400, f"Invalid report_type. Must be one of: {sorted(valid)}")
+    from services.notification_service import send_report_now
+    result = send_report_now(test_mode=True, send_types={report_type}, report_date=report_date)
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "Failed to send test report"))
+    return {"status": "success", "message": f"Test {report_type} report sent to test recipients"}
+
+
+# =====================================================
+# EMAIL REPORT — CLEAR DAILY FILES
+# =====================================================
+
+@app.get("/REPORT-FILES-STATUS")
+def report_files_status():
+    """Returns upload status for each daily report file slot."""
+    meta_path = os.path.join(REPORT_DAILY_DIR, "meta.json")
+    meta_store = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta_store = json.load(f)
+
+    result = {}
+    for key, filename in REPORT_FILE_MAP.items():
+        path = os.path.join(REPORT_DAILY_DIR, filename)
+        result[key] = {
+            "uploaded": os.path.exists(path),
+            "meta":     meta_store.get(key)
+        }
+    return result
+
+
+def _detect_data_date(contents: bytes, filename: str, file_type: str):
+    """
+    Tries to detect the data date from an uploaded file.
+    Returns 'YYYY-MM-DD' string or None if not determinable.
+    Skips master-data files (employee, managers) that have no meaningful date.
+    Strategy (in order):
+      1. Filename regex — YYYY-MM-DD, YYYYMMDD, DD-MM-YYYY patterns
+      2. Column names that parse as dates
+      3. Column values in date-named columns
+      4. Broad cell-value scan
+    """
+    if file_type in ("employee", "managers"):
+        return None
+
+    def _parse_date_str(s):
+        try:
+            d = pd.to_datetime(s, dayfirst=False, errors="coerce")
+            if pd.isnull(d):
+                d = pd.to_datetime(s, dayfirst=True, errors="coerce")
+            if not pd.isnull(d) and 2020 <= d.year <= 2035:
+                return str(d.date())
+        except Exception:
+            pass
+        return None
+
+    # ── 1. Parse date from filename ───────────────────────────────────────
+    fn = os.path.splitext(filename)[0]
+    for pat in [
+        r'(\d{4}[-_]\d{2}[-_]\d{2})',   # YYYY-MM-DD / YYYY_MM_DD
+        r'(\d{2}[-_]\d{2}[-_]\d{4})',   # DD-MM-YYYY / DD_MM_YYYY
+        r'(\d{8})',                       # YYYYMMDD
+    ]:
+        m = re.search(pat, fn)
+        if m:
+            d = _parse_date_str(m.group(1))
+            if d:
+                return d
+
+    # ── 2–4. Parse from file contents ─────────────────────────────────────
+    try:
+        is_excel = contents[:2] == b"PK" or filename.lower().endswith((".xlsx", ".xls"))
+        if is_excel:
+            df = pd.read_excel(BytesIO(contents), dtype=str).fillna("")
+        else:
+            df = pd.read_csv(BytesIO(contents), dtype=str,
+                             encoding="utf-8-sig", on_bad_lines="skip").fillna("")
+        df.columns = df.columns.astype(str).str.strip()
+
+        # 2. Column headers that look like dates (catches attendance/distance: "May 6, 2026")
+        for col in df.columns:
+            d = _parse_date_str(col)
+            if d:
+                return d
+
+        # 3. Columns with date-like names (catches forms: "Action Date" → "2026-05-06")
+        date_hints = ["date", "day", "sodn start", "sodn_start", "start time",
+                      "alarm start", "created", "timestamp", "reported", "action date"]
+        for col in df.columns:
+            if any(h in col.lower() for h in date_hints):
+                sample = df[col].replace("", pd.NA).dropna().head(20)
+                parsed = pd.to_datetime(sample, errors="coerce").dropna()
+                if len(parsed) > 0:
+                    return str(parsed.dt.date.value_counts().idxmax())
+
+        # 4. Broad scan — first column where 60%+ values parse as dates
+        for col in df.columns:
+            sample = df[col].replace("", pd.NA).dropna().head(10)
+            if len(sample) == 0:
+                continue
+            parsed = pd.to_datetime(sample, errors="coerce").dropna()
+            if len(parsed) >= max(1, len(sample) * 0.6):
+                return str(parsed.dt.date.value_counts().idxmax())
+    except Exception:
+        pass
+    return None
+
+
+@app.post("/SCAN-FILE-DATES")
+def scan_file_dates():
+    """Re-scans all uploaded daily files and updates data_date in metadata."""
+    meta_path  = os.path.join(REPORT_DAILY_DIR, "meta.json")
+    meta_store = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta_store = json.load(f)
+
+    updated = {}
+    for file_type, filename in REPORT_FILE_MAP.items():
+        path = os.path.join(REPORT_DAILY_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        if meta_store.get(file_type, {}).get("data_date"):
+            updated[file_type] = meta_store[file_type]["data_date"]
+            continue  # already detected, skip
+        try:
+            with open(path, "rb") as f:
+                contents = f.read()
+            data_date = _detect_data_date(contents, filename, file_type)
+            if data_date:
+                if file_type not in meta_store:
+                    meta_store[file_type] = {}
+                meta_store[file_type]["data_date"] = data_date
+                updated[file_type] = data_date
+        except Exception:
+            pass
+
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_store, f, indent=2)
+
+    return {"scanned": updated}
+
+
+@app.post("/UPLOAD-REPORT-FILE")
+async def upload_report_file(
+    file_type: str      = Form(...),
+    file:      UploadFile = File(...),
+):
+    """Saves an uploaded daily report file into data/daily/ and records metadata."""
+    if file_type not in REPORT_FILE_MAP:
+        raise HTTPException(400, f"Unknown file_type '{file_type}'. Valid: {list(REPORT_FILE_MAP)}")
+
+    filename  = REPORT_FILE_MAP[file_type]
+    dest_path = os.path.join(REPORT_DAILY_DIR, filename)
+
+    contents = await file.read()
+    with open(dest_path, "wb") as f:
+        f.write(contents)
+
+    data_date = _detect_data_date(contents, file.filename or filename, file_type)
+
+    # Update per-key metadata in meta.json
+    meta_path  = os.path.join(REPORT_DAILY_DIR, "meta.json")
+    meta_store = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta_store = json.load(f)
+
+    from datetime import datetime as _dt
+    meta_store[file_type] = {
+        "uploaded_at":   _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S") + "Z",
+        "original_name": file.filename,
+        "size_bytes":    len(contents),
+        "data_date":     data_date,
+    }
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(meta_store, f, indent=2)
+
+    return {"status": "ok", "key": file_type, "saved_as": filename, "data_date": data_date}
+
+
+@app.post("/CLEAR-REPORT-FILES")
+def clear_report_files():
+    """Deletes all files in data/daily/ so the operator can start fresh for today."""
+    import json as _json
+
+    deleted = []
+    for key, filename in REPORT_FILE_MAP.items():
+        path = os.path.join(REPORT_DAILY_DIR, filename)
+        if os.path.exists(path):
+            os.remove(path)
+            deleted.append(filename)
+
+    meta_path = os.path.join(REPORT_DAILY_DIR, "meta.json")
+    if os.path.exists(meta_path):
+        os.remove(meta_path)
+
+    return {"status": "success", "cleared": deleted}
+
+
+# =====================================================
+# EMAIL REPORT — DATA PREVIEWS
+# =====================================================
+
+@app.get("/REPORT-PREVIEW/FORMS")
+def preview_forms(db: Session = Depends(get_db)):
+    """
+    Returns form submission counts per user for the most recent upload date.
+    Used by the Email Reports page to preview what will appear in the emails.
+    """
+    from sqlalchemy import func as _func
+    from models import FormEntry
+
+    latest_date = db.query(_func.max(FormEntry.selected_date)).scalar()
+    if not latest_date:
+        return {"date": None, "rows": []}
+
+    results = (
+        db.query(
+            FormEntry.username,
+            FormEntry.form_type,
+            _func.count(FormEntry.id).label("count"),
+        )
+        .filter(
+            FormEntry.selected_date == latest_date,
+            FormEntry.row_status == "valid",
+        )
+        .group_by(FormEntry.username, FormEntry.form_type)
+        .order_by(FormEntry.username)
+        .all()
+    )
+
+    # Group by username → list of {form_type, count}
+    from collections import defaultdict as _dd
+    grouped = _dd(list)
+    for r in results:
+        grouped[r.username].append({"form_type": r.form_type, "count": r.count})
+
+    rows = [
+        {"username": u, "forms": f, "total": sum(x["count"] for x in f)}
+        for u, f in grouped.items()
+    ]
+    rows.sort(key=lambda x: -x["total"])
+
+    return {"date": str(latest_date), "rows": rows}
+
+
+@app.get("/REPORT-PREVIEW/MANAGERS")
+def preview_managers():
+    """
+    Reads the uploaded manager/employee file and returns:
+    - all column names found
+    - grouped manager → team list
+    Tries managers.xlsx first, falls back to employee.xlsx.
+    """
+    # Prefer the dedicated managers file, fall back to employee file
+    for fname in ["managers.xlsx", "employee.xlsx"]:
+        path = os.path.join(REPORT_DAILY_DIR, fname)
+        if os.path.exists(path):
+            break
+    else:
+        return {"uploaded": False, "columns": [], "managers": {}}
+
+    try:
+        df = pd.read_excel(path)
+        df.columns = df.columns.astype(str).str.strip()
+        actual_columns = list(df.columns)
+
+        def find_col(candidates):
+            for c in candidates:
+                for col in df.columns:
+                    if c.lower() in col.lower():
+                        return col
+            return None
+
+        # Try every likely variation of manager / name / username / city column
+        manager_col = find_col([
+            "Reporting Manager", "Manager Name", "Manager", "Mgr",
+            "Team Lead", "Supervisor", "Head",
+        ])
+        name_col = find_col([
+            "Full Name", "Employee Name", "Emp Name", "Name",
+        ])
+        user_col = find_col([
+            "Field Executive Username", "Username", "User Name",
+            "User ID", "Emp ID", "Employee ID", "ID",
+        ])
+        city_col = find_col([
+            "City", "Circle", "Region", "Location", "Zone", "State",
+        ])
+
+        if not manager_col:
+            return {
+                "uploaded": True,
+                "columns":  actual_columns,
+                "managers": {},
+                "error": (
+                    f"Could not find a Manager column. "
+                    f"Columns in your file: {actual_columns}"
+                ),
+            }
+
+        managers = {}
+        for _, row in df.iterrows():
+            mgr = str(row.get(manager_col, "")).strip()
+            if not mgr or mgr.lower() in ["nan", "none", ""]:
+                mgr = "Unassigned"
+
+            emp = {
+                "name":     str(row.get(name_col, "")).strip() if name_col else "",
+                "username": str(row.get(user_col, "")).strip() if user_col else "",
+                "city":     str(row.get(city_col, "")).strip() if city_col else "",
+            }
+            managers.setdefault(mgr, []).append(emp)
+
+        return {
+            "uploaded":      True,
+            "columns":       actual_columns,
+            "manager_col":   manager_col,
+            "name_col":      name_col,
+            "user_col":      user_col,
+            "city_col":      city_col,
+            "managers":      managers,
+            "source_file":   fname,
+        }
+
+    except Exception as e:
+        return {"uploaded": True, "columns": [], "managers": {}, "error": str(e)}
+
+
+# =====================================================
+# WFH / WFO ANALYSIS
+# =====================================================
+
+_DEFAULT_OFFICE_COORDS = {
+    "Delhi":        {"lat": 28.476166,   "lng": 77.093109},
+    "GJ":           None,
+    "KA":           {"lat": 12.971262,   "lng": 77.613021},
+    "Maharashtra":  {"lat": 18.566991,   "lng": 73.775431},
+    "Mumbai":       {"lat": 19.0652005,  "lng": 72.9993786},
+    "UPE":          {"lat": 26.867925,   "lng": 81.010461},
+    "UPW":          None,
+    "WB & Kolkata": {"lat": 22.572952,   "lng": 88.431080},
+    "MP & CG":      None,
+}
+
+_WFH_WFO_CONFIG_KEY = "wfh_wfo"
+
+
+def _get_wfh_wfo_config():
+    """Returns the WFH/WFO threshold config. Office coords are always hardcoded."""
+    from services.notification_service import _read_config
+    cfg = _read_config().get(_WFH_WFO_CONFIG_KEY, {})
+    return {
+        "wfo_radius_km": cfg.get("wfo_radius_km", 2.0),
+        "wfh_travel_km": cfg.get("wfh_travel_km", 2.0),
+    }
+
+
+def _save_wfh_wfo_config(new_cfg: dict):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    cfg[_WFH_WFO_CONFIG_KEY] = new_cfg
+    _write_config(cfg)
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
+WFH_WFO_RESULTS_PATH = os.path.join("data", "wfh_wfo_results.json")
+
+
+@app.get("/WFH-WFO/CONFIG")
+def get_wfh_wfo_config():
+    return _get_wfh_wfo_config()
+
+
+class WfhWfoConfigBody(PydanticBaseModel):
+    wfo_radius_km: float = 2.0
+    wfh_travel_km: float = 2.0
+
+
+@app.put("/WFH-WFO/CONFIG")
+def update_wfh_wfo_config(body: WfhWfoConfigBody):
+    _save_wfh_wfo_config({"wfo_radius_km": body.wfo_radius_km, "wfh_travel_km": body.wfh_travel_km})
+    return _get_wfh_wfo_config()
+
+
+@app.get("/WFH-WFO/STATUS")
+def wfh_wfo_status():
+    if os.path.exists(WFH_WFO_RESULTS_PATH):
+        with open(WFH_WFO_RESULTS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return {"results": [], "analyzed_at": None}
+
+
+@app.delete("/WFH-WFO/RESULTS")
+def wfh_wfo_clear():
+    if os.path.exists(WFH_WFO_RESULTS_PATH):
+        os.remove(WFH_WFO_RESULTS_PATH)
+    return {"ok": True}
+
+
+@app.post("/WFH-WFO/ANALYZE")
+async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
+    cfg        = _get_wfh_wfo_config()
+    wfo_radius = cfg["wfo_radius_km"]
+    wfh_travel = cfg["wfh_travel_km"]
+
+    results = []
+
+    for upload in files:
+        filename = upload.filename or "unknown"
+        try:
+            raw = await upload.read()
+            df = pd.read_csv(BytesIO(raw), dtype=str, encoding="utf-8-sig")
+            df.columns = df.columns.str.strip()
+
+            # Extract username from tracker_id (format: devicehex@username)
+            if "tracker_id" not in df.columns:
+                results.append({"file": filename, "error": "Missing 'tracker_id' column"})
+                continue
+
+            tracker_sample = df["tracker_id"].dropna().iloc[0] if not df["tracker_id"].dropna().empty else ""
+            if "@" not in tracker_sample:
+                results.append({"file": filename, "error": "Cannot extract username: '@' not found in tracker_id"})
+                continue
+            username = tracker_sample.split("@")[-1].strip()
+
+            # Filter out zero-coordinate rows
+            if "lat" not in df.columns or "lng" not in df.columns:
+                results.append({"file": filename, "username": username, "error": "Missing 'lat' or 'lng' column"})
+                continue
+
+            df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
+            df["lng"] = pd.to_numeric(df["lng"], errors="coerce")
+            valid_pts = df[(df["lat"] != 0) & (df["lng"] != 0) & df["lat"].notna() & df["lng"].notna()]
+
+            total_points = len(valid_pts)
+
+            # Check if any office coordinates exist at all (hardcoded)
+            available_offices = {
+                k: (v["lat"], v["lng"]) if isinstance(v, dict) else v
+                for k, v in _DEFAULT_OFFICE_COORDS.items()
+                if v is not None
+            }
+
+            if not available_offices:
+                results.append({
+                    "username":        username,
+                    "circle":          None,
+                    "status":          "WFH (No Office)",
+                    "min_distance_km": None,
+                    "total_points":    total_points,
+                })
+                continue
+
+            if total_points == 0:
+                results.append({
+                    "username":          username,
+                    "circle":            None,
+                    "status":            "WFH",
+                    "min_distance_km":   None,
+                    "total_travel_km":   0.0,
+                    "total_points":      0,
+                })
+                continue
+
+            import numpy as np
+            lats = valid_pts["lat"].to_numpy(dtype=float)
+            lngs = valid_pts["lng"].to_numpy(dtype=float)
+
+            # ── Min distance to nearest office (vectorized) ──────────────
+            best_circle   = None
+            best_distance = float("inf")
+
+            for circle_name, coords in available_offices.items():
+                off_lat, off_lng = coords
+                dlat = np.radians(off_lat - lats)
+                dlon = np.radians(off_lng - lngs)
+                a = (np.sin(dlat/2)**2
+                     + np.cos(np.radians(lats)) * np.cos(off_lat * np.pi/180) * np.sin(dlon/2)**2)
+                dists = 6371 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
+                min_d = float(dists.min())
+                if min_d < best_distance:
+                    best_distance = min_d
+                    best_circle   = circle_name
+
+            # ── Total travel distance (sum of consecutive point distances) ─
+            if len(lats) >= 2:
+                dlat_c = np.radians(lats[1:] - lats[:-1])
+                dlon_c = np.radians(lngs[1:] - lngs[:-1])
+                a_c = (np.sin(dlat_c/2)**2
+                       + np.cos(np.radians(lats[:-1])) * np.cos(np.radians(lats[1:])) * np.sin(dlon_c/2)**2)
+                total_travel_km = float((6371 * 2 * np.arctan2(np.sqrt(a_c), np.sqrt(1 - a_c))).sum())
+            else:
+                total_travel_km = 0.0
+
+            # ── WFO: within wfo_radius of office   WFH: travelled ≥ wfh_travel ──
+            if best_distance <= wfo_radius:
+                status = "WFO"
+            else:
+                status = "WFH"  # any outdoor movement or insufficient movement
+
+            results.append({
+                "username":          username,
+                "circle":            best_circle,
+                "status":            status,
+                "min_distance_km":   round(best_distance, 4),
+                "total_travel_km":   round(total_travel_km, 4),
+                "total_points":      total_points,
+            })
+
+        except Exception as e:
+            results.append({"file": filename, "error": str(e)})
+
+    os.makedirs("data", exist_ok=True)
+    with open(WFH_WFO_RESULTS_PATH, "w", encoding="utf-8") as f:
+        json.dump({"results": results, "analyzed_at": datetime.now().isoformat()}, f, indent=2)
+
+    return {"results": results}

@@ -1,0 +1,81 @@
+{
+  "managers": [
+    {
+      "name": "Abhiman Ganguly",
+      "email": "abhiman.ganguly@shaurryatele.com",
+      "circle": "WB & Kolkata"
+    },
+    {
+      "name": "Dattatray Ganpat Ranmakar",
+      "email": "dattatray@shaurryatele.com",
+      "circle": "Maharashtra"
+    },
+    {
+      "name": "Deepak Nadar",
+      "email": "deepak@shaurryatele.com",
+      "circle": "Mumbai"
+    },
+    {
+      "name": "Pankaj Chaudhary",
+      "email": "pankaj@shaurryatele.com",
+      "circle": "Delhi"
+    },
+    {
+      "name": "Pankaj Gaurav",
+      "email": "pankajg@shaurryatele.com",
+      "circle": "Delhi"
+    },
+    {
+      "name": "Piyush Khobragade",
+      "email": "piyush.khobragade@shaurryatele.com",
+      "circle": "MP & CG"
+    },
+    {
+      "name": "Rajesh Shukla",
+      "email": "rajesh.shukla@shaurryatele.com",
+      "circle": "UPW"
+    },
+    {
+      "name": "Rajnish Nimbark",
+      "email": "rajnish@shaurryatele.com",
+      "circle": "GJ"
+    },
+    {
+      "name": "Sanjeev Goel",
+      "email": "sanjeevg_st_1765365615044@skedulomatic.com",
+      "circle": "Maharashtra"
+    },
+    {
+      "name": "Satish Megaraj",
+      "email": "satish.megaraj@shaurryatele.com",
+      "circle": "KA"
+    },
+    {
+      "name": "Saurabh Gupta",
+      "email": "saurabhgupta@shaurryatele.com",
+      "circle": "Delhi"
+    },
+    {
+      "name": "Sunil P Bhagwat",
+      "email": "sunilbhagwat@shaurryatele.com",
+      "circle": "Mumbai"
+    },
+    {
+      "name": "Vivek Vinod",
+      "email": "vivek.v@sovereignsolutions.com",
+      "circle": ""
+    }
+  ],
+  "mail_enabled": true,
+  "test_mode": true,
+  "test_email": "pranjalg.work@gmail.com",
+  "test_emails": [
+    "pranjalg.work@gmail.com"
+  ],
+  "management_recipients": [
+    {
+      "name": "Pranjal Gupta",
+      "email": "pranjal.gupta@shaurryatele.com"
+    }
+  ]
+}
