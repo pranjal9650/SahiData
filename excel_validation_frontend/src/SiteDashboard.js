@@ -259,7 +259,8 @@ const SiteDashboard = () => {
   const [loading,    setLoading]    = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [selectedDays,   setSelectedDays]   = useState(30);
+  const todayStr = new Date().toLocaleDateString("en-CA");
+  const [selectedDate, setSelectedDate] = useState(todayStr);
 
   /* — filter state — */
   const [activeSearch,       setActiveSearch]       = useState("");
@@ -268,10 +269,10 @@ const SiteDashboard = () => {
   const [alarmTypeFilter,    setAlarmTypeFilter]    = useState("All");
   const [alarmCircleFilter,  setAlarmCircleFilter]  = useState("All");
 
-  const fetchAll = useCallback(async (isRefresh = false, days = 30) => {
+  const fetchAll = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    const p = `?days=${days}`;
+    const p = `?date=${selectedDate}`;
     try {
       const [sRes, alRes, alListRes, trendRes, typeRes, circleRes, acRes, dsRes] = await Promise.allSettled([
         axios.get(`${BASE_URL}/SITE-DASHBOARD-STATS${p}`),
@@ -280,8 +281,8 @@ const SiteDashboard = () => {
         axios.get(`${BASE_URL}/SITE-ALARM-TREND${p}`),
         axios.get(`${BASE_URL}/SITE-ALARM-BY-TYPE${p}`),
         axios.get(`${BASE_URL}/SITE-ALARM-BY-CIRCLE${p}`),
-        axios.get(`${BASE_URL}/SITE-ACTIVE-BY-CIRCLE`),
-        axios.get(`${BASE_URL}/SITE-DOWN-LIST`),
+        axios.get(`${BASE_URL}/SITE-ACTIVE-BY-CIRCLE${p}`),
+        axios.get(`${BASE_URL}/SITE-DOWN-LIST${p}`),
       ]);
       if (sRes.status === "fulfilled")      setStats(sRes.value.data);
       if (alRes.status === "fulfilled")     setActiveList(Array.isArray(alRes.value.data) ? alRes.value.data : []);
@@ -298,9 +299,9 @@ const SiteDashboard = () => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedDate]);
 
-  useEffect(() => { fetchAll(false, selectedDays); }, [fetchAll, selectedDays]);
+  useEffect(() => { fetchAll(); }, [fetchAll]);
 
   /* — derived filter options — */
   const activeCircleOpts = [...new Set(activeList.map((r) => r.circle).filter(Boolean))].sort();
@@ -371,22 +372,33 @@ const SiteDashboard = () => {
           <h2 style={{ fontSize: 20, fontWeight: 800, color: T.text, margin: 0, letterSpacing: "-0.4px" }}>Site Dashboard</h2>
           {lastUpdated && (
             <p style={{ fontSize: 12, color: T.muted, margin: "3px 0 0" }}>
-              Last updated: {lastUpdated.toLocaleTimeString()} · Last {selectedDays} days
+              Last updated: {lastUpdated.toLocaleTimeString()} · Showing: {selectedDate}
             </p>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <DayRangePicker
-            value={selectedDays}
-            onChange={(d) => {
-              setSelectedDays(d);
+          <input
+            type="date"
+            value={selectedDate}
+            max={todayStr}
+            onChange={(e) => {
+              setSelectedDate(e.target.value);
               setAlarmTypeFilter("All");
               setAlarmCircleFilter("All");
               setAlarmSearch("");
             }}
+            style={{
+              height: 34, padding: "0 10px",
+              borderRadius: 8, border: `1px solid ${T.border}`,
+              background: T.pageBg, fontSize: 13,
+              fontFamily: "'DM Sans', sans-serif",
+              color: T.text, outline: "none", cursor: "pointer",
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = T.red; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = T.border; }}
           />
         <button
-          onClick={() => fetchAll(true, selectedDays)}
+          onClick={() => fetchAll(true)}
           disabled={refreshing}
           style={{
             display: "inline-flex", alignItems: "center", gap: 7,
@@ -436,7 +448,7 @@ const SiteDashboard = () => {
           icon={AlertTriangle}
           accent={T.red}
           bg={T.redBg}
-          sub={`Last ${selectedDays} days`}
+          sub={selectedDate}
         />
         <SiteStatCard
           label="Sites with Alarms"
@@ -477,39 +489,35 @@ const SiteDashboard = () => {
 
         {/* Alarm Trend */}
         <SectionCard
-          title={`${selectedDays}-Day Alarm Trend`}
-          subtitle={`Daily alarm event count over the past ${selectedDays} days`}
+          title="Hourly Alarm Distribution"
+          subtitle={`Alarm events by hour for ${selectedDate}`}
           icon={Activity}
           accent={T.red}
           accentBg={T.redBg}
         >
           <div style={{ padding: "20px 24px 24px" }}>
-            {alarmTrend.length === 0 ? (
+            {alarmTrend.every(d => d.count === 0) ? (
               <div style={{ height: 220, display: "flex", alignItems: "center", justifyContent: "center", color: T.muted, fontSize: 14 }}>
-                No trend data available
+                No alarm data for this date
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={alarmTrend.map((d) => ({ ...d, label: fmtTrendDate(d.date) }))}>
+                <BarChart data={alarmTrend} barCategoryGap="20%">
                   <CartesianGrid strokeDasharray="3 3" stroke={T.border} vertical={false} />
                   <XAxis
-                    dataKey="label"
-                    tick={{ fontSize: 11, fill: T.muted, fontFamily: "'DM Sans', sans-serif" }}
+                    dataKey="hour"
+                    tick={{ fontSize: 9, fill: T.muted, fontFamily: "'DM Sans', sans-serif" }}
                     axisLine={{ stroke: T.border }} tickLine={false} dy={8}
+                    interval={2}
                   />
                   <YAxis
                     allowDecimals={false}
                     tick={{ fontSize: 11, fill: T.muted, fontFamily: "'DM Sans', sans-serif" }}
                     axisLine={false} tickLine={false}
                   />
-                  <Tooltip content={<ChartTooltip />} />
-                  <Line
-                    type="monotone" dataKey="count" name="Alarms"
-                    stroke={T.red} strokeWidth={2.5}
-                    dot={{ fill: T.red, r: 4, strokeWidth: 2, stroke: T.white }}
-                    activeDot={{ r: 6, stroke: T.red, strokeWidth: 2, fill: T.white }}
-                  />
-                </LineChart>
+                  <Tooltip content={<ChartTooltip />} cursor={{ fill: "rgba(0,0,0,0.025)" }} />
+                  <Bar dataKey="count" name="Alarms" fill={T.red} radius={[4, 4, 0, 0]} maxBarSize={28} />
+                </BarChart>
               </ResponsiveContainer>
             )}
           </div>
@@ -703,7 +711,7 @@ const SiteDashboard = () => {
       {/* ── Alarm Events Table ── */}
       <SectionCard
         title="Alarm Events"
-        subtitle={`Last ${selectedDays}-day alarm report — site outage events`}
+        subtitle={`Alarm report for ${selectedDate} — site outage events`}
         icon={AlertTriangle}
         accent={T.red}
         accentBg={T.redBg}

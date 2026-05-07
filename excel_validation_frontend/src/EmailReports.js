@@ -25,7 +25,7 @@ const FILE_SLOTS = [
   {
     key:         "employee_manager",
     combinedKeys: ["employee", "managers"],
-    label:       "Employee & Manager Details",
+    label:       "Employee Details",
     description: "Master list — Name, Username, Manager, City, Circle",
     accept:      ".xlsx,.xls",
     icon:        FileSpreadsheet,
@@ -59,12 +59,11 @@ const FILE_SLOTS = [
   },
   {
     key:         "alarm",
-    label:       "Alarm / Sites Down",
+    label:       "Sites Down",
     description: "Site outage data — Global ID, Site Name, State / Circle",
     accept:      "*",
     icon:        FileText,
-    freq:        "Daily (optional)",
-    optional:    true,
+    freq:        "Daily",
   },
   {
     key:         "active_sites",
@@ -72,8 +71,16 @@ const FILE_SLOTS = [
     description: "Active site list — State/Circle, Site ID, Site Name (one row per site)",
     accept:      "*",
     icon:        FileText,
-    freq:        "Daily (optional)",
-    optional:    true,
+    freq:        "Daily",
+  },
+  {
+    key:         "site_master",
+    label:       "Site Master",
+    description: "Master site list — Global ID, Site Name, State/Circle, Latitude, Longitude",
+    accept:      ".xlsx,.xls,.csv",
+    icon:        FileSpreadsheet,
+    freq:        "Monthly / as updated",
+    noDateCheck: true,
   },
 ];
 
@@ -107,12 +114,12 @@ function fmtTime(iso) {
 
 function FileCard({ slot, statusData, onUpload, uploadingKey, reportDate }) {
   const inputRef = useRef(null);
-  const [drag, setDrag] = useState(false);
+  const [drag,  setDrag]  = useState(false);
+  const [hover, setHover] = useState(false);
 
-  // For combined slots, derive status from all constituent keys
   const keys     = slot.combinedKeys || [slot.key];
   const infos    = keys.map(k => statusData[k] || {});
-  const info     = infos[0]; // use first key for filename/size display
+  const info     = infos[0];
   const meta     = info.meta;
   const uploaded = infos.every(i => i.uploaded && !!i.meta);
   const fresh    = uploaded && infos.every(i => isToday(i.meta?.uploaded_at));
@@ -120,198 +127,179 @@ function FileCard({ slot, statusData, onUpload, uploadingKey, reportDate }) {
   const busy     = uploadingKey === slot.key;
   const Icon     = slot.icon;
 
-  // Date validation — skip for master-data slots
   const skipDateCheck = slot.noDateCheck;
   const dataDate      = meta?.data_date || null;
   const dateMismatch  = !skipDateCheck && uploaded && dataDate && reportDate && dataDate !== reportDate;
 
   const pick = (file) => { if (file) onUpload(slot.key, file); };
 
-  // colours — date mismatch overrides green with amber
-  let border = "#D1D5DB", bg = "#FAFAFA";
-  if (drag)            { border = T.red;   bg = T.redLight;  }
-  else if (dateMismatch) { border = T.amber; bg = T.amberBg; }
-  else if (fresh)      { border = T.green; bg = T.greenBg;   }
-  else if (stale)      { border = T.amber; bg = T.amberBg;   }
+  const isReady   = fresh && !dateMismatch;
+  const isWarning = dateMismatch || stale;
+  const accentColor = isReady ? "#22c55e" : isWarning ? "#f59e0b" : "rgba(204,0,0,0.25)";
+  const iconBg    = isReady ? "rgba(34,197,94,0.10)" : isWarning ? "rgba(245,158,11,0.10)" : "rgba(204,0,0,0.07)";
+  const iconColor = isReady ? "#16a34a" : isWarning ? "#d97706" : "#CC0000";
+  const borderColor = isReady ? "#86efac" : isWarning ? "#fca5a5" : "rgba(204,0,0,0.18)";
+  const cardBg    = hover
+    ? (isReady ? "rgba(34,197,94,0.07)" : isWarning ? "rgba(239,68,68,0.05)" : "rgba(204,0,0,0.04)")
+    : "#ffffff";
+  const fmt = slot.accept === "*" ? "CSV · XLSX" : slot.accept.replace(/\./g, "").toUpperCase().replace(/,/g, " · ");
 
   return (
-    <div style={{
-      border: `1.5px solid ${border}`,
-      borderRadius: 12,
-      background: bg,
-      padding: "18px 18px 14px",
-      display: "flex",
-      flexDirection: "column",
-      gap: 10,
-      transition: "border-color .18s, background .18s",
-    }}>
-
-      {/* — top row — */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-
-        {/* icon box */}
-        <div style={{
-          width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-          background: fresh ? T.greenBg : stale ? T.amberBg : T.redLight,
-          border: `1px solid ${fresh ? "#bbf7d0" : stale ? "#fde68a" : "rgba(204,0,0,0.16)"}`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          <Icon size={16} color={fresh ? T.green : stale ? T.amber : T.red} />
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: cardBg,
+        borderRadius: 14,
+        border: `1.5px solid ${borderColor}`,
+        boxShadow: hover ? "0 8px 24px rgba(0,0,0,0.09)" : "0 1px 4px rgba(0,0,0,0.05)",
+        padding: "10px 10px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 5,
+        overflow: "hidden",
+        transition: "box-shadow .2s, transform .18s, background .2s, border-color .2s",
+        transform: hover ? "translateY(-2px)" : "none",
+      }}
+    >
+      {/* header: icon box + title/freq + dot */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        <div style={{ width: 20, height: 20, borderRadius: 6, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "background .2s" }}>
+          <Icon size={9} color={iconColor} />
         </div>
-
-        {/* labels */}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <p style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: T.black }}>
-              {slot.label}
-            </p>
-            {slot.optional && (
-              <span style={{
-                fontSize: 10, fontWeight: 600, color: T.amber,
-                background: T.amberBg, border: "1px solid #fde68a",
-                borderRadius: 20, padding: "1px 8px",
-              }}>
-                Optional
-              </span>
-            )}
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1E293B", letterSpacing: "-0.2px", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>
+            {slot.label}
           </div>
-          <p style={{ margin: "3px 0 0", fontSize: 11.5, color: T.grey500, lineHeight: 1.4 }}>
-            {slot.description}
-          </p>
-          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9CA3AF" }}>
-            Frequency: {slot.freq}
-          </p>
+          {slot.freq && (
+            <div style={{ fontSize: 10, color: "#C4CBD8", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{slot.freq}</div>
+          )}
         </div>
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: accentColor, flexShrink: 0, marginTop: 2, transition: "background .2s" }} />
+      </div>
 
-        {/* status badge */}
-        {fresh ? (
-          <span style={badge(T.green, T.greenBg, "#bbf7d0")}>
-            <CheckCircle size={10} /> Ready
-          </span>
+      {/* badge */}
+      <div>
+        {isReady ? (
+          <span style={badge("#15803d", "#f0fdf4", "#bbf7d0")}><CheckCircle size={8} /> Ready</span>
+        ) : dateMismatch ? (
+          <span style={badge("#b45309", "#fefce8", "#fde68a")}><AlertTriangle size={8} /> Mismatch</span>
         ) : stale ? (
-          <span style={badge(T.amber, T.amberBg, "#fde68a")}>
-            <AlertTriangle size={10} /> Outdated
-          </span>
+          <span style={badge("#b45309", "#fefce8", "#fde68a")}><AlertTriangle size={8} /> Outdated</span>
         ) : (
-          <span style={badge(T.grey500, "#F3F4F6", "#E5E7EB")}>
-            <Clock size={10} /> Pending
-          </span>
+          <span style={badge("#CC0000", "rgba(204,0,0,0.06)", "rgba(204,0,0,0.20)")}><Clock size={8} /> Pending</span>
         )}
       </div>
 
-      {/* — stale warning — */}
-      {stale && !dateMismatch && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6,
-          background: "#fffbeb", border: "1px solid #fde68a",
-          borderRadius: 7, padding: "7px 10px",
-          fontSize: 11.5, color: "#92400e",
-        }}>
-          <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-          Uploaded <strong style={{ margin: "0 3px" }}>{relLabel(meta?.uploaded_at)}</strong>
-          — please re-upload today's file.
-        </div>
-      )}
-
-      {/* — date mismatch warning — */}
-      {dateMismatch && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 6,
-          background: "#fffbeb", border: "1px solid #fde68a",
-          borderRadius: 7, padding: "7px 10px",
-          fontSize: 11.5, color: "#92400e",
-        }}>
-          <AlertTriangle size={11} style={{ flexShrink: 0 }} />
-          Data date is <strong style={{ margin: "0 3px" }}>{dataDate}</strong>
-          but report date is <strong style={{ margin: "0 3px" }}>{reportDate}</strong> — please re-upload the correct file.
-        </div>
-      )}
-
-      {/* — file meta (fresh only) — */}
+      {/* compact file info */}
       {uploaded && meta && (
-        <div style={{
-          fontSize: 11.5, color: T.grey500,
-          background: "#F9FAFB", borderRadius: 7,
-          padding: "6px 10px", lineHeight: 1.7,
-        }}>
-          <strong style={{ color: T.black }}>{meta.original_name}</strong>
-          {" · "}{fmtTime(meta.uploaded_at)}
-          {" · "}{(meta.size_bytes / 1024).toFixed(1)} KB
-          {dataDate && !skipDateCheck && (
-            <span style={{ marginLeft: 6, color: dateMismatch ? "#b45309" : "#059669", fontWeight: 600 }}>
-              · Data: {dataDate}
-            </span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 10, fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {meta.original_name}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2, fontSize: 9.5, color: "#9CA3AF", flexWrap: "wrap" }}>
+            <span>{relLabel(meta.uploaded_at)}</span>
+            {dataDate && !skipDateCheck && (
+              <span style={{ fontWeight: 700, color: dateMismatch ? "#d97706" : "#16a34a" }}>· {dataDate}</span>
+            )}
+          </div>
+          {(dateMismatch || stale) && (
+            <div style={{ display: "flex", alignItems: "center", gap: 3, marginTop: 2, fontSize: 9, color: "#d97706", overflow: "hidden" }}>
+              <AlertTriangle size={8} style={{ flexShrink: 0 }} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {dateMismatch ? `${dataDate} ≠ ${reportDate}` : "Re-upload today"}
+              </span>
+            </div>
           )}
         </div>
       )}
 
-      {/* — drop zone — */}
+      {/* spacer pushes upload zone to bottom */}
+      <div style={{ flex: 1 }} />
+
+      {/* upload zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}
         onClick={() => !busy && inputRef.current?.click()}
         style={{
-          border: `1.5px dashed ${drag ? T.red : "#D1D5DB"}`,
-          borderRadius: 8, padding: "16px 12px",
-          textAlign: "center",
+          borderRadius: 8,
+          border: `1.5px dashed ${drag ? T.red : uploaded ? "#E2E8F0" : "#D8DFE8"}`,
+          padding: uploaded ? "4px 8px" : "8px 6px",
+          display: "flex",
+          flexDirection: uploaded ? "row" : "column",
+          alignItems: "center",
+          justifyContent: uploaded ? "flex-start" : "center",
+          gap: uploaded ? 6 : 5,
           cursor: busy ? "not-allowed" : "pointer",
-          background: drag ? T.redLight : "transparent",
+          background: drag ? "#FFF5F5" : uploaded ? "#FAFBFD" : "#F7F9FC",
           transition: "all .15s",
-          opacity: busy ? 0.65 : 1,
+          opacity: busy ? 0.7 : 1,
         }}
       >
-        {busy
-          ? <RefreshCw size={18} color={T.red}   style={{ marginBottom: 5, animation: "spin 1s linear infinite" }} />
-          : <Upload    size={18} color={drag ? T.red : T.grey500} style={{ marginBottom: 5 }} />
-        }
-        <p style={{ margin: 0, fontSize: 12.5, color: busy ? T.red : T.grey500 }}>
-          {busy
-            ? "Uploading…"
-            : (fresh || stale)
-              ? "Drop a new file to replace"
-              : "Click or drag & drop to upload"}
-        </p>
-        <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9CA3AF" }}>
-          {slot.accept === "*" ? "CSV, XLSX, XLS" : slot.accept.replace(/\./g, "").toUpperCase().replace(/,/g, ", ")}
-        </p>
+        {uploaded ? (
+          <>
+            {busy
+              ? <RefreshCw size={10} color={T.red} style={{ flexShrink: 0, animation: "spin 1s linear infinite" }} />
+              : <Upload size={10} color={drag ? T.red : "#C4CBD8"} style={{ flexShrink: 0 }} />}
+            <span style={{ flex: 1, fontSize: 11, color: busy ? T.red : "#B8C0CC", fontWeight: 500 }}>
+              {busy ? "Uploading…" : "Drop to replace"}
+            </span>
+            {!busy && <span style={{ fontSize: 10, color: "#D1D5DB", flexShrink: 0 }}>{fmt}</span>}
+          </>
+        ) : (
+          <>
+            <div style={{ width: 22, height: 22, borderRadius: 7, background: drag ? "#FEE2E2" : "rgba(204,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}>
+              {busy
+                ? <RefreshCw size={10} color={T.red} style={{ animation: "spin 1s linear infinite" }} />
+                : <Upload size={10} color={drag ? T.red : "#CC0000"} />}
+            </div>
+            <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 500, textAlign: "center" }}>
+              {busy ? "Uploading…" : "Click or drop"}
+            </span>
+            {!busy && <span style={{ fontSize: 10, color: "#C4CBD8" }}>{fmt}</span>}
+          </>
+        )}
       </div>
 
-      <input
-        ref={inputRef}
-        type="file"
-        accept={slot.accept}
-        style={{ display: "none" }}
-        onChange={(e) => pick(e.target.files[0])}
-      />
+      <input ref={inputRef} type="file" accept={slot.accept} style={{ display: "none" }} onChange={(e) => pick(e.target.files[0])} />
     </div>
   );
 }
 
 function badge(color, bg, borderColor) {
   return {
-    display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
-    fontSize: 10.5, fontWeight: 600, color,
+    display: "inline-flex", alignItems: "center", gap: 3,
+    fontSize: 10, fontWeight: 700, color,
     background: bg, border: `1px solid ${borderColor}`,
-    borderRadius: 20, padding: "3px 9px",
-    whiteSpace: "nowrap",
+    borderRadius: 4, padding: "2px 6px",
+    whiteSpace: "nowrap", letterSpacing: "0.1px",
   };
 }
 
 // ── WFH / WFO card (fits inside the 3-column file grid) ──────────────
 
-function WfhWfoCard({ wfhAnalyzing, wfhInputRef, onAnalyze, onClear, wfhClearing, wfhStoredAt, wfhStoredCount, serverOnline, wfhConfig, wfhConfigDraft, setWfhConfigDraft, onSaveWfhConfig, savingWfhConfig }) {
-  const [drag, setDrag] = useState(false);
+function WfhWfoCard({ wfhAnalyzing, wfhInputRef, onAnalyze, onClear, wfhClearing, wfhStoredAt, wfhStoredCount, serverOnline, wfhConfig, wfhConfigDraft, setWfhConfigDraft, onSaveWfhConfig, savingWfhConfig, offices, onAddOffice, onUpdateOffice, onDeleteOffice }) {
+  const [drag,  setDrag]        = useState(false);
+  const [hover, setHover]       = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  const draft = wfhConfigDraft || wfhConfig;
-  const isDirty = wfhConfigDraft !== null;
+  const [officeForm,     setOfficeForm]     = useState({ name: "", lat: "", lng: "" });
+  const [editingOffice,  setEditingOffice]  = useState(null); // office name being edited
+  const [showAddOffice,  setShowAddOffice]  = useState(false);
+  const [savingOffice,   setSavingOffice]   = useState(false);
 
+  const draft   = wfhConfigDraft || wfhConfig;
+  const isDirty = wfhConfigDraft !== null;
   const hasSaved = !!wfhStoredAt;
-  let border = "#D1D5DB", bg = "#FAFAFA";
-  if (drag)           { border = "#059669"; bg = "rgba(5,150,105,0.06)"; }
-  else if (wfhAnalyzing) { border = "#059669"; bg = "rgba(5,150,105,0.04)"; }
-  else if (hasSaved)  { border = T.green;   bg = T.greenBg; }
+  const accentColor = hasSaved ? "#22c55e" : "rgba(204,0,0,0.25)";
+  const iconBg      = hasSaved ? "rgba(34,197,94,0.10)" : "rgba(204,0,0,0.07)";
+  const iconColor   = hasSaved ? "#16a34a" : "#CC0000";
+  const borderColor = hasSaved ? "#86efac" : "rgba(204,0,0,0.18)";
+  const cardBg      = hover
+    ? (hasSaved ? "rgba(34,197,94,0.07)" : "rgba(204,0,0,0.04)")
+    : "#ffffff";
 
   const addFiles = (files) => {
     const csvs = Array.from(files).filter(f => f.name.endsWith(".csv"));
@@ -319,168 +307,218 @@ function WfhWfoCard({ wfhAnalyzing, wfhInputRef, onAnalyze, onClear, wfhClearing
   };
 
   return (
-    <div style={{
-      border: `1.5px solid ${border}`,
-      borderRadius: 12,
-      background: bg,
-      padding: "18px 18px 14px",
-      display: "flex",
-      flexDirection: "column",
-      gap: 10,
-      transition: "border-color .18s, background .18s",
-    }}>
+    <div style={{ position: "relative", zIndex: showSettings ? 20 : undefined }}>
 
-      {/* — top row — */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-          background: hasSaved ? T.greenBg : "rgba(5,150,105,0.08)",
-          border: `1px solid ${hasSaved ? "#bbf7d0" : "rgba(5,150,105,0.18)"}`,
-          display: "flex", alignItems: "center", justifyContent: "center",
-        }}>
-          {wfhAnalyzing
-            ? <RefreshCw size={15} color="#059669" style={{ animation: "spin 1s linear infinite" }} />
-            : <FileText size={16} color={hasSaved ? T.green : "#059669"} />
-          }
-        </div>
-
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-            <p style={{ margin: 0, fontSize: 13.5, fontWeight: 700, color: T.black }}>
-              WFH / WFO
-            </p>
-            <span style={{
-              fontSize: 10, fontWeight: 600, color: "#059669",
-              background: "rgba(5,150,105,0.08)", border: "1px solid rgba(5,150,105,0.18)",
-              borderRadius: 20, padding: "1px 8px",
-            }}>Optional</span>
-          </div>
-          <p style={{ margin: "3px 0 0", fontSize: 11.5, color: T.grey500, lineHeight: 1.4 }}>
-            Drop GPS tracking CSVs — auto-included in the report email
-          </p>
-          <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9CA3AF" }}>Frequency: As needed</p>
-        </div>
-
-        {wfhAnalyzing ? (
-          <span style={badge("#059669", "rgba(5,150,105,0.08)", "rgba(5,150,105,0.25)")}><RefreshCw size={10} style={{ animation: "spin 1s linear infinite" }} /> Processing</span>
-        ) : hasSaved ? (
-          <span style={badge(T.green, T.greenBg, "#bbf7d0")}><CheckCircle size={10} /> Ready</span>
-        ) : (
-          <span style={badge(T.grey500, "#F3F4F6", "#E5E7EB")}><Clock size={10} /> Optional</span>
-        )}
-      </div>
-
-      {/* — drop zone — auto-analyzes on drop/select — */}
+      {/* ── card (always square, never grows) ── */}
       <div
-        onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
-        onClick={() => !wfhAnalyzing && wfhInputRef.current?.click()}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
         style={{
-          border: `1.5px dashed ${drag ? "#059669" : "#D1D5DB"}`,
-          borderRadius: 8, padding: "18px 12px",
-          textAlign: "center",
-          cursor: wfhAnalyzing ? "not-allowed" : "pointer",
-          background: drag ? "rgba(5,150,105,0.04)" : "transparent",
-          transition: "all .15s",
-          opacity: wfhAnalyzing ? 0.65 : 1,
+          background: cardBg,
+          borderRadius: 14,
+          border: `1.5px solid ${borderColor}`,
+          boxShadow: hover ? "0 8px 24px rgba(0,0,0,0.09)" : "0 1px 4px rgba(0,0,0,0.05)",
+          padding: "10px 10px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 5,
+          overflow: "hidden",
+          transition: "box-shadow .2s, transform .18s, background .2s, border-color .2s",
+          transform: hover ? "translateY(-2px)" : "none",
         }}
       >
-        {wfhAnalyzing
-          ? <RefreshCw size={18} color="#059669" style={{ marginBottom: 5, animation: "spin 1s linear infinite" }} />
-          : <Upload size={18} color={drag ? "#059669" : T.grey500} style={{ marginBottom: 5 }} />
-        }
-        <p style={{ margin: 0, fontSize: 12.5, color: wfhAnalyzing ? "#059669" : T.grey500 }}>
-          {wfhAnalyzing ? "Analyzing GPS data…" : "Click or drag & drop tracking CSVs"}
-        </p>
-        <p style={{ margin: "3px 0 0", fontSize: 11, color: "#9CA3AF" }}>
-          {wfhAnalyzing ? "Results will appear in the report email" : "Multiple files accepted — one per employee"}
-        </p>
-        <input
-          ref={wfhInputRef}
-          type="file"
-          accept=".csv"
-          multiple
-          style={{ display: "none" }}
-          onChange={e => { addFiles(e.target.files); e.target.value = ""; }}
-        />
-      </div>
-
-      {/* — saved status + clear — */}
-      {hasSaved && (
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-          background: "rgba(5,150,105,0.06)", border: "1px solid rgba(5,150,105,0.22)",
-          borderRadius: 7, padding: "8px 10px",
-        }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
-            <CheckCircle size={12} color="#059669" style={{ flexShrink: 0 }} />
-            <span style={{ fontSize: 11.5, color: "#065f46", fontWeight: 700 }}>
-              {wfhStoredCount} employee{wfhStoredCount !== 1 ? "s" : ""}
-            </span>
-            <span style={{ fontSize: 11, color: "#6B7280" }}>included in next report</span>
+        {/* header */}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+          <div style={{ width: 20, height: 20, borderRadius: 6, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "background .2s" }}>
+            {wfhAnalyzing
+              ? <RefreshCw size={9} color="#059669" style={{ animation: "spin 1s linear infinite" }} />
+              : <FileText size={9} color={iconColor} />}
           </div>
-          <button
-            onClick={onClear}
-            disabled={wfhClearing}
-            style={{ ...actionBtn(T.red, "#fef2f2"), fontSize: 11, padding: "3px 9px", flexShrink: 0 }}
-          >
-            {wfhClearing ? "…" : "Clear"}
-          </button>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#1E293B", letterSpacing: "-0.2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>WFH / WFO</div>
+            <div style={{ fontSize: 10, color: "#C4CBD8", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Daily</div>
+          </div>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: accentColor, flexShrink: 0, marginTop: 3, transition: "background .2s" }} />
         </div>
-      )}
 
-      {/* — thresholds settings — */}
-      <div style={{ borderTop: "1px solid #F3F4F6", paddingTop: 8 }}>
+        {/* badge */}
+        <div>
+          {wfhAnalyzing ? (
+            <span style={badge("#059669", "#f0fdf4", "#a7f3d0")}><RefreshCw size={8} style={{ animation: "spin 1s linear infinite" }} /> Processing</span>
+          ) : hasSaved ? (
+            <span style={badge("#15803d", "#f0fdf4", "#bbf7d0")}><CheckCircle size={8} /> Ready</span>
+          ) : (
+            <span style={badge("#CC0000", "rgba(204,0,0,0.06)", "rgba(204,0,0,0.20)")}><Clock size={8} /> Pending</span>
+          )}
+        </div>
+
+        {/* saved info */}
+        {hasSaved && (
+          <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "#9CA3AF" }}>
+            <span style={{ fontWeight: 700, color: "#16a34a" }}>{wfhStoredCount} emp.</span>
+            <span>ready</span>
+            <button onClick={onClear} disabled={wfhClearing}
+              style={{ ...actionBtn(T.red, "#fef2f2"), fontSize: 10.5, padding: "2px 8px", marginLeft: "auto" }}>
+              {wfhClearing ? "…" : "Clear"}
+            </button>
+          </div>
+        )}
+
+        {/* spacer pushes upload zone to bottom */}
+        <div style={{ flex: 1 }} />
+
+        {/* upload zone */}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => { e.preventDefault(); setDrag(false); addFiles(e.dataTransfer.files); }}
+          onClick={() => !wfhAnalyzing && wfhInputRef.current?.click()}
+          style={{
+            borderRadius: 8,
+            border: `1.5px dashed ${drag ? "#059669" : "#DDE3ED"}`,
+            padding: hasSaved ? "4px 8px" : "8px 6px",
+            display: "flex",
+            flexDirection: hasSaved ? "row" : "column",
+            alignItems: "center",
+            justifyContent: hasSaved ? "flex-start" : "center",
+            gap: hasSaved ? 6 : 5,
+            cursor: wfhAnalyzing ? "not-allowed" : "pointer",
+            background: drag ? "rgba(5,150,105,0.04)" : "#FAFBFD",
+            transition: "all .15s",
+            opacity: wfhAnalyzing ? 0.7 : 1,
+          }}
+        >
+          {hasSaved ? (
+            <>
+              {wfhAnalyzing
+                ? <RefreshCw size={10} color="#059669" style={{ flexShrink: 0, animation: "spin 1s linear infinite" }} />
+                : <Upload size={10} color={drag ? "#059669" : "#C4CBD8"} style={{ flexShrink: 0 }} />}
+              <span style={{ flex: 1, fontSize: 11, color: wfhAnalyzing ? "#059669" : "#B0B8C8", fontWeight: 500 }}>
+                {wfhAnalyzing ? "Analyzing…" : "Drop to replace CSVs"}
+              </span>
+              {!wfhAnalyzing && <span style={{ fontSize: 10, color: "#D1D5DB", flexShrink: 0 }}>CSV</span>}
+            </>
+          ) : (
+            <>
+              <div style={{ width: 22, height: 22, borderRadius: 7, background: drag ? "rgba(5,150,105,0.08)" : "rgba(204,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}>
+                {wfhAnalyzing
+                  ? <RefreshCw size={10} color="#059669" style={{ animation: "spin 1s linear infinite" }} />
+                  : <Upload size={10} color={drag ? "#059669" : "#CC0000"} />}
+              </div>
+              <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 500, textAlign: "center" }}>
+                {wfhAnalyzing ? "Analyzing…" : "Click or drop CSVs"}
+              </span>
+              {!wfhAnalyzing && <span style={{ fontSize: 10, color: "#C4CBD8" }}>CSV</span>}
+            </>
+          )}
+        </div>
+        <input ref={wfhInputRef} type="file" accept=".csv" multiple style={{ display: "none" }} onChange={e => { addFiles(e.target.files); e.target.value = ""; }} />
+
+        {/* settings toggle */}
         <button
           onClick={() => setShowSettings(s => !s)}
-          style={{ background: "none", border: "none", cursor: "pointer", padding: 0,
-            fontSize: 11, color: T.grey500, display: "flex", alignItems: "center", gap: 4 }}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, color: showSettings ? "#1E293B" : "#94A3B8", display: "flex", alignItems: "center", gap: 5, transition: "color .15s" }}
         >
-          <Settings size={11} /> Thresholds {showSettings ? "▲" : "▼"}
+          <Settings size={11} /> Settings {showSettings ? "▲" : "▼"}
         </button>
+      </div>
 
-        {showSettings && (
-          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", gap: 10 }}>
-              <label style={{ flex: 1, fontSize: 11, color: T.grey500 }}>
-                WFO radius (km)
-                <input
-                  type="number" min="0.1" step="0.1"
-                  value={draft.wfo_radius_km}
-                  onChange={e => setWfhConfigDraft({ ...draft, wfo_radius_km: parseFloat(e.target.value) || 2.0 })}
-                  style={{ display: "block", width: "100%", marginTop: 3,
-                    border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 8px",
-                    fontSize: 12, outline: "none" }}
-                />
-              </label>
-              <label style={{ flex: 1, fontSize: 11, color: T.grey500 }}>
-                WFH travel (km)
-                <input
-                  type="number" min="0.1" step="0.1"
-                  value={draft.wfh_travel_km}
-                  onChange={e => setWfhConfigDraft({ ...draft, wfh_travel_km: parseFloat(e.target.value) || 2.0 })}
-                  style={{ display: "block", width: "100%", marginTop: 3,
-                    border: "1px solid #D1D5DB", borderRadius: 6, padding: "4px 8px",
-                    fontSize: 12, outline: "none" }}
-                />
-              </label>
+      {/* ── settings panel: floats below card, never affects grid ── */}
+      {showSettings && (
+        <div style={{
+          position: "absolute",
+          top: "calc(100% + 8px)",
+          right: 0,
+          width: 360,
+          zIndex: 50,
+          background: "#fff",
+          border: "1px solid #E8ECF4",
+          borderRadius: 12,
+          boxShadow: "0 8px 32px rgba(0,0,0,0.13)",
+          padding: "16px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}>
+
+          {/* ── Office locations ── */}
+          <div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 12, fontWeight: 700, color: T.black }}>Office Locations</span>
+              <button
+                onClick={() => { setShowAddOffice(true); setEditingOffice(null); setOfficeForm({ name: "", lat: "", lng: "" }); }}
+                style={{ ...actionBtn(T.green, "#f0fdf4"), fontSize: 10, padding: "2px 8px" }}>+ Add</button>
             </div>
+
+            <div style={{ border: "1px solid #F0F2F7", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 76px auto", gap: 6, padding: "6px 8px", background: "#F8FAFC", fontSize: 10, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+                <span>Name</span><span>Lat</span><span>Lng</span><span>Actions</span>
+              </div>
+
+              {(offices || []).map((o) => (
+                <div key={o.name} style={{ borderTop: "1px solid #F5F5F5" }}>
+                  {editingOffice === o.name ? (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 76px auto", gap: 6, padding: "5px 8px", alignItems: "center" }}>
+                      <input value={officeForm.name} onChange={e => setOfficeForm(f => ({ ...f, name: e.target.value }))} style={{ ...tinyInput }} placeholder="Name" />
+                      <input value={officeForm.lat} onChange={e => setOfficeForm(f => ({ ...f, lat: e.target.value }))} style={{ ...tinyInput }} placeholder="Lat" />
+                      <input value={officeForm.lng} onChange={e => setOfficeForm(f => ({ ...f, lng: e.target.value }))} style={{ ...tinyInput }} placeholder="Lng" />
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button disabled={savingOffice} onClick={async () => { setSavingOffice(true); await onUpdateOffice(o.name, officeForm); setEditingOffice(null); setSavingOffice(false); }} style={{ ...actionBtn(T.green, "#f0fdf4"), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>Save</button>
+                        <button onClick={() => setEditingOffice(null)} style={{ ...actionBtn(T.grey500, "#F3F4F6"), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>✕</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 76px auto", gap: 6, padding: "7px 8px", alignItems: "center" }}>
+                      <span style={{ fontSize: 11.5, fontWeight: 600, color: T.black, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{o.name}</span>
+                      <span style={{ fontSize: 10.5, color: T.grey500, fontVariantNumeric: "tabular-nums" }}>{o.lat}</span>
+                      <span style={{ fontSize: 10.5, color: T.grey500, fontVariantNumeric: "tabular-nums" }}>{o.lng}</span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <button onClick={() => { setEditingOffice(o.name); setOfficeForm({ name: o.name, lat: String(o.lat), lng: String(o.lng) }); setShowAddOffice(false); }} style={{ ...actionBtn("#0369a1", "rgba(3,105,161,0.07)"), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>Edit</button>
+                        <button onClick={() => onDeleteOffice(o.name)} style={{ ...actionBtn(T.red, T.redLight), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>✕</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {(offices || []).length === 0 && !showAddOffice && (
+                <div style={{ padding: "10px 8px", fontSize: 11, color: T.grey500, textAlign: "center" }}>No offices configured</div>
+              )}
+
+              {showAddOffice && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 76px 76px auto", gap: 6, padding: "5px 8px", alignItems: "center", borderTop: "1px solid #F5F5F5", background: "#F0FDF4" }}>
+                  <input value={officeForm.name} onChange={e => setOfficeForm(f => ({ ...f, name: e.target.value }))} style={{ ...tinyInput }} placeholder="Name" />
+                  <input value={officeForm.lat} onChange={e => setOfficeForm(f => ({ ...f, lat: e.target.value }))} style={{ ...tinyInput }} placeholder="Lat" />
+                  <input value={officeForm.lng} onChange={e => setOfficeForm(f => ({ ...f, lng: e.target.value }))} style={{ ...tinyInput }} placeholder="Lng" />
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button disabled={savingOffice} onClick={async () => { setSavingOffice(true); await onAddOffice(officeForm); setShowAddOffice(false); setOfficeForm({ name: "", lat: "", lng: "" }); setSavingOffice(false); }} style={{ ...actionBtn(T.green, "#f0fdf4"), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>Add</button>
+                    <button onClick={() => setShowAddOffice(false)} style={{ ...actionBtn(T.grey500, "#F3F4F6"), fontSize: 10, padding: "3px 7px", fontWeight: 600 }}>✕</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── WFH travel threshold ── */}
+          <div>
+            <label style={{ fontSize: 12, color: T.grey500, fontWeight: 600 }}>
+              WFH min. travel (km)
+              <input type="number" min="0.1" step="0.1" value={draft.wfh_travel_km}
+                onChange={e => setWfhConfigDraft({ ...draft, wfh_travel_km: parseFloat(e.target.value) || 2.0 })}
+                style={{ display: "block", width: "100%", marginTop: 4, border: "1px solid #E2E8F0", borderRadius: 7, padding: "6px 10px", fontSize: 12, outline: "none", fontFamily: "'DM Sans', sans-serif" }}
+              />
+            </label>
             {isDirty && (
-              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                <button onClick={() => setWfhConfigDraft(null)}
-                  style={{ ...actionBtn(T.grey500, "#F3F4F6"), fontSize: 11, padding: "3px 9px" }}>
-                  Cancel
-                </button>
-                <button onClick={onSaveWfhConfig} disabled={savingWfhConfig}
-                  style={{ ...actionBtn("#fff", T.green), fontSize: 11, padding: "3px 9px" }}>
+              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8 }}>
+                <button onClick={() => setWfhConfigDraft(null)} style={{ ...actionBtn(T.grey500, "#F3F4F6"), fontSize: 11, padding: "4px 12px" }}>Cancel</button>
+                <button onClick={onSaveWfhConfig} disabled={savingWfhConfig} style={{ ...actionBtn("#fff", T.green), fontSize: 11, padding: "4px 12px" }}>
                   {savingWfhConfig ? "Saving…" : "Save"}
                 </button>
               </div>
             )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -502,7 +540,7 @@ export default function EmailReports() {
   const [loadingPreview,  setLoadingPreview]  = useState(false);
   const [testMode,        setTestMode]        = useState(true);
   const [testEmail,       setTestEmail]       = useState("pranjalg.work@gmail.com");
-  const [togglingTest,    setTogglingTest]    = useState(false);
+  const [, setTogglingTest]    = useState(false);
   const [mailEnabled,     setMailEnabled]     = useState(true);
   const [togglingMail,    setTogglingMail]    = useState(false);
   const [modalExtraEmails, setModalExtraEmails] = useState("");
@@ -526,9 +564,10 @@ export default function EmailReports() {
   const [wfhStoredCount, setWfhStoredCount] = useState(0);
   const [wfhClearing,    setWfhClearing]    = useState(false);
   const wfhInputRef = useRef(null);
-  const [wfhConfig,       setWfhConfig]       = useState({ wfo_radius_km: 2.0, wfh_travel_km: 2.0 });
-  const [wfhConfigDraft,  setWfhConfigDraft]  = useState(null); // null = not editing
+  const [wfhConfig,       setWfhConfig]       = useState({ wfh_travel_km: 2.0 });
+  const [wfhConfigDraft,  setWfhConfigDraft]  = useState(null);
   const [savingWfhConfig, setSavingWfhConfig] = useState(false);
+  const [offices,         setOffices]         = useState([]);
 
   const showToast = (type, msg) => {
     setToast({ type, msg });
@@ -565,11 +604,12 @@ export default function EmailReports() {
         setTestMode(testRes.value.data.test_mode);
         setTestEmail(testRes.value.data.test_email || "pranjalg.work@gmail.com");
       }
-      // Load stored GPS results + thresholds config (non-blocking)
+      // Load stored GPS results + thresholds config + offices (non-blocking)
       try {
-        const [wfhRes, wfhCfgRes] = await Promise.allSettled([
+        const [wfhRes, wfhCfgRes, officesRes] = await Promise.allSettled([
           axios.get(`${API}/WFH-WFO/STATUS`),
           axios.get(`${API}/WFH-WFO/CONFIG`),
+          axios.get(`${API}/WFH-WFO/OFFICES`),
         ]);
         if (wfhRes.status === "fulfilled") {
           const validResults = (wfhRes.value.data.results || []).filter(r => r.status === "WFH" || r.status === "WFO");
@@ -578,6 +618,9 @@ export default function EmailReports() {
         }
         if (wfhCfgRes.status === "fulfilled") {
           setWfhConfig(wfhCfgRes.value.data);
+        }
+        if (officesRes.status === "fulfilled") {
+          setOffices(officesRes.value.data);
         }
       } catch { /* silent */ }
     } catch {
@@ -640,6 +683,31 @@ export default function EmailReports() {
     } catch (e) {
       showToast("error", "Could not save thresholds.");
     } finally { setSavingWfhConfig(false); }
+  };
+
+  const handleAddOffice = async ({ name, lat, lng }) => {
+    try {
+      const { data } = await axios.post(`${API}/WFH-WFO/OFFICES`, { name, lat: parseFloat(lat), lng: parseFloat(lng) });
+      setOffices(data);
+      showToast("success", `Office "${name}" added.`);
+    } catch (e) { showToast("error", e.response?.data?.detail || "Failed to add office."); }
+  };
+
+  const handleUpdateOffice = async (oldName, { name, lat, lng }) => {
+    try {
+      const { data } = await axios.put(`${API}/WFH-WFO/OFFICES/${encodeURIComponent(oldName)}`, { name, lat: parseFloat(lat), lng: parseFloat(lng) });
+      setOffices(data);
+      showToast("success", `Office updated.`);
+    } catch (e) { showToast("error", e.response?.data?.detail || "Failed to update office."); }
+  };
+
+  const handleDeleteOffice = async (name) => {
+    if (!window.confirm(`Remove office "${name}"?`)) return;
+    try {
+      const { data } = await axios.delete(`${API}/WFH-WFO/OFFICES/${encodeURIComponent(name)}`);
+      setOffices(data);
+      showToast("success", `Office "${name}" removed.`);
+    } catch (e) { showToast("error", "Failed to delete office."); }
   };
 
   const handleSaveExtraRecipients = async () => {
@@ -990,20 +1058,6 @@ export default function EmailReports() {
       </div>
 
       {/* ── info banner ── */}
-      <div style={{
-        display: "flex", alignItems: "flex-start", gap: 9,
-        background: "#EFF6FF", border: "1px solid #BFDBFE",
-        borderRadius: 10, padding: "11px 16px",
-        fontSize: 12.5, color: "#1e40af",
-      }}>
-        <Info size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-        <span>
-          Upload all 4 required files below each day before clicking <strong>Send Reports Now</strong>.
-          Files uploaded on a previous day are shown as <strong>Outdated</strong> — always replace them with today's data.
-          Use the <strong>Test Emails</strong> panel to verify the output before a full send.
-        </span>
-      </div>
-
       {/* ── report date picker ── */}
       <div style={{
         background: "#fff", border: "1px solid #E5E2DC",
@@ -1069,11 +1123,7 @@ export default function EmailReports() {
           <p style={{ margin: 0, fontSize: 13 }}>Checking file status…</p>
         </div>
       ) : (
-        <div style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 14,
-        }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: 10, width: "100%" }}>
           {FILE_SLOTS.map((slot) => (
             <FileCard
               key={slot.key}
@@ -1098,6 +1148,10 @@ export default function EmailReports() {
             setWfhConfigDraft={setWfhConfigDraft}
             onSaveWfhConfig={handleSaveWfhConfig}
             savingWfhConfig={savingWfhConfig}
+            offices={offices}
+            onAddOffice={handleAddOffice}
+            onUpdateOffice={handleUpdateOffice}
+            onDeleteOffice={handleDeleteOffice}
           />
         </div>
       )}
@@ -1749,6 +1803,12 @@ export default function EmailReports() {
     </div>
   );
 }
+
+const tinyInput = {
+  padding: "3px 6px", borderRadius: 5, border: "1px solid #E2E8F0",
+  fontSize: 10.5, fontFamily: "'DM Sans', sans-serif", color: "#111",
+  outline: "none", width: "100%", boxSizing: "border-box",
+};
 
 const inputStyle = {
   padding: "7px 10px", borderRadius: 7, border: "1px solid #E5E7EB",

@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import extract
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pydantic import BaseModel as PydanticBaseModel
 from typing import List, Dict, Optional
 from routes import site_monitoring
@@ -18,7 +19,7 @@ import uuid
 import re
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from math import radians, sin, cos, sqrt, atan2
 
@@ -629,23 +630,49 @@ def fetch_all_sites():
 
 
 def fetch_alarm_data(start_date=None, end_date=None, imei=None):
-    params = {}
-    if start_date and end_date:
-        params["start_date"] = start_date
-        params["end_date"]   = end_date
+    today = datetime.now().strftime("%Y-%m-%d")
+    params = {
+        "start_date": start_date or today,
+        "end_date":   end_date   or today,
+    }
     if imei:
         params["imei"] = imei
     try:
-        return requests.get(ALARM_API_URL, params=params).json().get("data", [])
+        resp = requests.get(ALARM_API_URL, params=params, timeout=45)
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        print(f"✅ Alarm API returned {len(data)} records for {params['start_date']} → {params['end_date']}")
+        return data
     except Exception as e:
-        print("Alarm API Error:", e)
+        print(f"❌ Alarm API Error: {e}")
         return []
+
+
+# Alarm types that count as a site being "down"
+CRITICAL_ALARM_KEYWORDS = ["BTLV", "L LVD CUT", "MNSF"]
+
+def is_critical_alarm(alarm):
+    name = (alarm.get("alarm_name") or "").upper().strip()
+    return any(k in name for k in CRITICAL_ALARM_KEYWORDS)
+
+
+def is_active_alarm(alarm):
+    """True when the alarm has no end_time or ended within the last 10 minutes."""
+    et = alarm.get("end_time")
+    if not et or str(et).strip() in ("", "None", "null"):
+        return True
+    try:
+        end_dt = datetime.strptime(str(et).strip(), "%Y-%m-%d %H:%M:%S")
+        return (datetime.now() - end_dt).total_seconds() < 600
+    except Exception:
+        return False
 
 
 def build_site_monitoring(start_date=None, end_date=None):
     sites  = fetch_all_sites()
     alarms = fetch_alarm_data(start_date, end_date)
 
+    # Group ALL alarms by IMEI
     alarm_map = {}
     for alarm in alarms:
         imei = str(alarm.get("imei")).strip()
@@ -659,10 +686,10 @@ def build_site_monitoring(start_date=None, end_date=None):
         site_name = site.get("site_name")
         global_id = site.get("globel_id")
 
-        site_alarms = alarm_map.get(imei, [])
+        critical_alarms = [a for a in alarm_map.get(imei, []) if is_critical_alarm(a)]
 
-        if site_alarms:
-            latest = sorted(site_alarms, key=lambda x: x.get("start_time", ""), reverse=True)[0]
+        if critical_alarms:
+            latest = sorted(critical_alarms, key=lambda x: x.get("start_time", ""), reverse=True)[0]
             down_sites.append({
                 "site_name": site_name,
                 "global_id": global_id,
@@ -670,7 +697,7 @@ def build_site_monitoring(start_date=None, end_date=None):
                 "status":    "DOWN",
                 "alarm":     latest.get("alarm_name"),
                 "since":     latest.get("start_time"),
-                "end_time":  latest.get("end_time")
+                "end_time":  latest.get("end_time"),
             })
         else:
             up_sites.append({
@@ -678,7 +705,7 @@ def build_site_monitoring(start_date=None, end_date=None):
                 "global_id": global_id,
                 "imei":      imei,
                 "status":    "UP",
-                "since":     "Running"
+                "since":     "Running",
             })
 
     return sites, up_sites, down_sites
@@ -724,12 +751,211 @@ def site_monitoring_api(
     end_date:   str = None,
     db: Session = Depends(get_db)
 ):
-    total, up, down = build_site_monitoring(start_date, end_date)
-    save_site_monitoring_to_db(db, up, down)
+    sites_raw  = fetch_all_sites()
+    alarms_raw = fetch_alarm_data(start_date, end_date)
+
+    alarm_map = {}
+    for alarm in alarms_raw:
+        imei = str(alarm.get("imei")).strip()
+        alarm_map.setdefault(imei, []).append(alarm)
+
+    up_sites, down_sites = [], []
+    for site in sites_raw:
+        imei            = str(site.get("gsm_imei_no")).strip()
+        critical_alarms = [a for a in alarm_map.get(imei, []) if is_critical_alarm(a)]
+        if critical_alarms:
+            latest = sorted(critical_alarms, key=lambda x: x.get("start_time", ""), reverse=True)[0]
+            down_sites.append({
+                "site_name": site.get("site_name"),
+                "global_id": site.get("globel_id"),
+                "imei":      imei,
+                "status":    "DOWN",
+                "alarm":     latest.get("alarm_name"),
+                "since":     latest.get("start_time"),
+                "end_time":  latest.get("end_time"),
+            })
+        else:
+            up_sites.append({
+                "site_name": site.get("site_name"),
+                "global_id": site.get("globel_id"),
+                "imei":      imei,
+                "status":    "UP",
+                "since":     "Running",
+            })
+
+    save_site_monitoring_to_db(db, up_sites, down_sites)
+
+    total = len(sites_raw)
+
+    def _has(alarm, *keywords):
+        name = (alarm.get("alarm_name") or "").upper()
+        return any(k in name for k in keywords)
+
+    # KPIs count unique sites that had that alarm type today
+    mains_failed = len({
+        str(a.get("imei")).strip() for a in alarms_raw
+        if _has(a, "MNSF", "MAINS", "MAIN FAIL")
+    })
+    battery_low = len({
+        str(a.get("imei")).strip() for a in alarms_raw
+        if _has(a, "BTLV", "BATTERY", "LVD")
+    })
+    healthy_pct = round(len(up_sites) / total * 100) if total else 0
+
     return {
-        "total_sites": len(total),
-        "up_sites":    len(up),
-        "down_sites":  len(down)
+        "total_sites":   total,
+        "up_sites":      len(up_sites),
+        "down_sites":    len(down_sites),
+        "total_alarms":  len(alarms_raw),
+        "mains_failed":  mains_failed,
+        "battery_low":   battery_low,
+        "healthy_pct":   healthy_pct,
+    }
+
+
+@app.get("/SITE-ALARMS")
+def site_alarms_api(start_date: str = None, end_date: str = None):
+    alarms = fetch_alarm_data(start_date, end_date)
+
+    result = []
+    for alarm in alarms:
+        active = is_active_alarm(alarm)
+        volt   = alarm.get("volt")
+        result.append({
+            "imei":       str(alarm.get("imei")).strip(),
+            "site_name":  alarm.get("site_name"),
+            "global_id":  alarm.get("globel_id"),
+            "alarm_name": alarm.get("alarm_name"),
+            "start_time": alarm.get("start_time"),
+            "end_time":   alarm.get("end_time"),
+            "state_name": alarm.get("state_name"),
+            "district":   alarm.get("district_name"),
+            "volt":       volt if volt else None,
+            "is_active":  active,
+        })
+
+    result.sort(key=lambda x: x["start_time"] or "", reverse=True)
+    result.sort(key=lambda x: not x["is_active"])
+    return result
+
+
+def _alarm_duration_min(alarm):
+    st = alarm.get("start_time")
+    et = alarm.get("end_time")
+    if not st:
+        return None
+    try:
+        start_dt = datetime.strptime(str(st).strip(), "%Y-%m-%d %H:%M:%S")
+        if et and str(et).strip() not in ("", "None", "null"):
+            end_dt = datetime.strptime(str(et).strip(), "%Y-%m-%d %H:%M:%S")
+        else:
+            end_dt = datetime.now()
+        return max(0, round((end_dt - start_dt).total_seconds() / 60))
+    except Exception:
+        return None
+
+
+@app.get("/SITE-DETAIL")
+def site_detail(imei: str, days: int = 7):
+    today     = datetime.now().strftime("%Y-%m-%d")
+    start_day = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    alarms    = fetch_alarm_data(start_date=start_day, end_date=today, imei=imei)
+
+    if not alarms:
+        return {
+            "imei": imei, "total_alarms": 0, "active_count": 0,
+            "resolved_count": 0, "active_alarms": [], "alarm_history": [],
+            "uptime_pct": 100, "total_downtime_hours": 0, "mttr_minutes": 0,
+            "alarm_types_count": 0, "longest_outage_min": 0, "shortest_outage_min": 0,
+            "downtime_by_reason": [], "daily_trend": [], "voltage_history": [],
+        }
+
+    active_alarms   = [a for a in alarms if is_active_alarm(a)]
+    resolved_alarms = [a for a in alarms if not is_active_alarm(a)]
+
+    # Per-alarm durations
+    durations_min = [d for a in alarms if (d := _alarm_duration_min(a)) is not None]
+    total_downtime_sec = sum(d * 60 for d in durations_min)
+    resolve_times_min  = [_alarm_duration_min(a) for a in resolved_alarms
+                          if _alarm_duration_min(a) is not None and _alarm_duration_min(a) > 0]
+
+    mttr_min = round(sum(resolve_times_min) / len(resolve_times_min)) if resolve_times_min else 0
+    total_period_sec = days * 24 * 3600
+    uptime_pct = max(0.0, round((1 - total_downtime_sec / total_period_sec) * 100, 1)) if total_period_sec else 100.0
+
+    # Downtime by reason
+    reason_hours  = {}
+    reason_counts = {}
+    for a in alarms:
+        name = a.get("alarm_name") or "Unknown"
+        dur  = _alarm_duration_min(a) or 0
+        reason_hours[name]  = reason_hours.get(name, 0)  + dur / 60
+        reason_counts[name] = reason_counts.get(name, 0) + 1
+
+    downtime_by_reason = sorted(
+        [{"alarm_name": k, "hours": round(v, 1), "count": reason_counts[k]}
+         for k, v in reason_hours.items()],
+        key=lambda x: x["hours"], reverse=True,
+    )
+
+    # Daily trend (alarm count per day)
+    daily_map = {}
+    for a in alarms:
+        day = (a.get("start_time") or "")[:10]
+        if day:
+            daily_map[day] = daily_map.get(day, 0) + 1
+
+    daily_trend = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        daily_trend.append({"date": d, "count": daily_map.get(d, 0)})
+
+    # Voltage history (non-zero volt readings, last 200 pts)
+    voltage_history = [
+        {"time": a.get("start_time"), "volt": round(float(a.get("volt")), 2)}
+        for a in alarms
+        if a.get("volt") and float(a.get("volt") or 0) > 0
+    ]
+    voltage_history.sort(key=lambda x: x["time"] or "")
+    voltage_history = voltage_history[-200:]
+
+    # Alarm history (sorted newest first)
+    alarm_history = []
+    for a in sorted(alarms, key=lambda x: x.get("start_time", ""), reverse=True):
+        dur = _alarm_duration_min(a)
+        alarm_history.append({
+            "alarm_name": a.get("alarm_name"),
+            "start_time": a.get("start_time"),
+            "end_time":   a.get("end_time"),
+            "is_active":  is_active_alarm(a),
+            "duration_min": dur,
+            "volt":       a.get("volt"),
+        })
+
+    return {
+        "imei":                 imei,
+        "total_alarms":         len(alarms),
+        "active_count":         len(active_alarms),
+        "resolved_count":       len(resolved_alarms),
+        "active_alarms": [
+            {
+                "alarm_name": a.get("alarm_name"),
+                "start_time": a.get("start_time"),
+                "duration_min": _alarm_duration_min(a),
+                "volt": a.get("volt"),
+            }
+            for a in sorted(active_alarms, key=lambda x: x.get("start_time", ""), reverse=True)
+        ],
+        "uptime_pct":           uptime_pct,
+        "total_downtime_hours": round(total_downtime_sec / 3600, 1),
+        "mttr_minutes":         mttr_min,
+        "alarm_types_count":    len(reason_hours),
+        "longest_outage_min":   max(durations_min) if durations_min else 0,
+        "shortest_outage_min":  min(d for d in durations_min if d > 0) if any(d > 0 for d in durations_min) else 0,
+        "downtime_by_reason":   downtime_by_reason,
+        "daily_trend":          daily_trend,
+        "voltage_history":      voltage_history,
+        "alarm_history":        alarm_history,
     }
 
 
@@ -1830,24 +2056,26 @@ def parse_duration_to_minutes(duration_str: str) -> float:
 
 
 @app.get("/SITE-DASHBOARD-STATS")
-def site_dashboard_stats(days: int = Query(7)):
+def site_dashboard_stats(date: str = None):
     try:
-        site_df  = load_site_status()
-        alarm_df = filter_alarm_by_days(load_alarm_report(), days)
+        d = date or datetime.now().strftime("%Y-%m-%d")
 
-        total_active_sites  = len(site_df)
-        total_alarm_events  = len(alarm_df)
-        unique_alarm_sites  = alarm_df["Global ID"].replace("", pd.NA).dropna().nunique()
-        circles_affected    = alarm_df["State/Circle"].replace("", pd.NA).dropna().nunique()
+        sites  = fetch_all_sites()
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
 
-        durations = alarm_df["Duration (HH:MM:SS)"].apply(parse_duration_to_minutes)
-        avg_alarm_duration_minutes = round(durations.mean(), 2) if len(durations) > 0 else 0
+        total_active_sites = len(sites)
+        total_alarm_events = len(alarms)
+        unique_alarm_sites = len(set(str(a.get("imei", "")).strip() for a in alarms if a.get("imei")))
+        circles_affected   = len(set(str(a.get("state_name", "")).strip() for a in alarms if a.get("state_name")))
+
+        durations = [dur for a in alarms if (dur := _alarm_duration_min(a)) is not None]
+        avg_alarm_duration_minutes = round(sum(durations) / len(durations), 2) if durations else 0
 
         return {
-            "total_active_sites":        total_active_sites,
-            "total_alarm_events":        total_alarm_events,
-            "unique_alarm_sites":        int(unique_alarm_sites),
-            "circles_affected":          int(circles_affected),
+            "total_active_sites":         total_active_sites,
+            "total_alarm_events":         total_alarm_events,
+            "unique_alarm_sites":         unique_alarm_sites,
+            "circles_affected":           circles_affected,
             "avg_alarm_duration_minutes": avg_alarm_duration_minutes,
         }
     except HTTPException:
@@ -1882,54 +2110,51 @@ def site_absent_stats():
 
 
 @app.get("/SITE-DOWN-LIST")
-def site_down_list():
-    """Returns list of sites currently down/outage."""
+def site_down_list(date: str = None):
+    """Returns list of sites currently down — based on critical alarms from live API."""
     try:
-        db = SessionLocal()
-        down_sites = db.query(models.SiteMonitoring).filter(
-            models.SiteMonitoring.status == "Outage"
-        ).all()
-        return [
-            {
-                "site_name": s.site_name,
-                "global_id": s.global_id,
-                "circle":    s.circle,
-                "alarm":     s.alarm,
-                "since":     s.since
-            }
-            for s in down_sites
-        ]
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+
+        seen = {}
+        for a in alarms:
+            if not is_critical_alarm(a):
+                continue
+            imei = str(a.get("imei", "")).strip()
+            if imei and imei not in seen:
+                seen[imei] = {
+                    "site_name": a.get("site_name"),
+                    "global_id": a.get("globel_id"),
+                    "circle":    a.get("state_name"),
+                    "alarm":     a.get("alarm_name"),
+                    "since":     a.get("start_time"),
+                }
+        return list(seen.values())
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
-    finally:
-        db.close()
 
 
 @app.get("/SITE-ACTIVE-LIST")
 def site_active_list():
     try:
-        df = load_site_status()
-        df = df.rename(columns={
-            "S.No.":             "s_no",
-            "Site ID":           "site_id",
-            "Site Name":         "site_name",
-            "State/Circle":      "circle",
-            "H1":                "h1",
-            "H2":                "h2",
-            "ID":                "id",
-            "IMEI No":           "imei_no",
-            "Mobile No":         "mobile_no",
-            "I&C Date":          "ic_date",
-            "Battery":           "battery",
-            "Battery (V)":       "battery_v",
-            "Temp":              "temp",
-            "Signal (dBm)":      "signal_dbm",
-            "Last Communication":"last_communication",
-            "Aging":             "aging",
-        })
-        return df.to_dict(orient="records")
+        sites = fetch_all_sites()
+        result = []
+        for s in sites:
+            result.append({
+                "site_id":            s.get("site_code") or s.get("globel_id") or "—",
+                "site_name":          s.get("site_name") or "—",
+                "circle":             s.get("state") or s.get("state_name") or s.get("circle") or "—",
+                "h1":                 s.get("h1") or s.get("district") or s.get("cluster") or "—",
+                "h2":                 s.get("h2") or "—",
+                "imei_no":            s.get("gsm_imei_no") or "—",
+                "battery_v":          s.get("battery_v") or s.get("battery") or "—",
+                "signal_dbm":         s.get("signal_dbm") or s.get("signal") or "—",
+                "last_communication": s.get("last_communication") or s.get("last_sync") or "—",
+                "aging":              s.get("aging") or "—",
+            })
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1937,30 +2162,34 @@ def site_active_list():
 
 
 @app.get("/SITE-ALARM-LIST")
-def site_alarm_list(days: int = Query(7)):
+def site_alarm_list(date: str = None):
     try:
-        df = filter_alarm_by_days(load_alarm_report(), days)
-        df = df.rename(columns={
-            "S.No.":                "s_no",
-            "Global ID":            "global_id",
-            "Site Name":            "site_name",
-            "State/Circle":         "circle",
-            "District":             "district",
-            "Cluster":              "cluster",
-            "Alarm On-Site":        "alarm_type",
-            "Alarm Start Time":     "alarm_start_time",
-            "Alarm End Time":       "alarm_end_time",
-            "Duration (HH:MM:SS)":  "duration",
-            "Battery Start Volt":   "battery_start_v",
-            "Battery End Volt":     "battery_end_v",
-            "Temp.":                "temp",
-            "IMEI":                 "imei",
-            "Site Running ON":      "site_running_on",
-            "Energy Start Time":    "energy_start_time",
-            "Energy End Time":      "energy_end_time",
-            "Acknowledge":          "acknowledge",
-        })
-        return df.to_dict(orient="records")
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+
+        result = []
+        for a in alarms:
+            dur_min = _alarm_duration_min(a)
+            if dur_min is not None:
+                h, m = divmod(int(dur_min), 60)
+                dur_str = f"{h:02d}:{m:02d}:00"
+            else:
+                dur_str = "—"
+            result.append({
+                "global_id":        a.get("globel_id") or "—",
+                "site_name":        a.get("site_name") or "—",
+                "circle":           a.get("state_name") or "—",
+                "district":         a.get("district") or "—",
+                "cluster":          a.get("cluster") or "—",
+                "alarm_type":       a.get("alarm_name") or "—",
+                "alarm_start_time": a.get("start_time") or "—",
+                "alarm_end_time":   a.get("end_time") or "—",
+                "duration":         dur_str,
+                "battery_start_v":  "—",
+                "battery_end_v":    a.get("volt") or "—",
+                "imei":             a.get("imei") or "—",
+            })
+        return result
     except HTTPException:
         raise
     except Exception as e:
@@ -1968,23 +2197,21 @@ def site_alarm_list(days: int = Query(7)):
 
 
 @app.get("/SITE-ALARM-TREND")
-def site_alarm_trend(days: int = Query(7)):
+def site_alarm_trend(date: str = None):
     try:
-        df = filter_alarm_by_days(load_alarm_report(), days)
-        df["_date"] = pd.to_datetime(
-            df["Alarm Start Time"], errors="coerce"
-        ).dt.date.astype(str)
-        df = df[df["_date"].notna() & (df["_date"] != "NaT") & (df["_date"] != "")]
-        trend = (
-            df.groupby("_date")
-            .size()
-            .reset_index(name="count")
-            .sort_values("_date")
-        )
-        return [
-            {"date": row["_date"], "count": int(row["count"])}
-            for _, row in trend.iterrows()
-        ]
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+
+        hourly = {h: 0 for h in range(24)}
+        for a in alarms:
+            st = a.get("start_time") or ""
+            if len(st) >= 13:
+                try:
+                    hourly[int(st[11:13])] += 1
+                except (ValueError, KeyError):
+                    pass
+
+        return [{"hour": f"{h:02d}:00", "count": hourly[h]} for h in range(24)]
     except HTTPException:
         raise
     except Exception as e:
@@ -1992,20 +2219,20 @@ def site_alarm_trend(days: int = Query(7)):
 
 
 @app.get("/SITE-ALARM-BY-TYPE")
-def site_alarm_by_type(days: int = Query(7)):
+def site_alarm_by_type(date: str = None):
     try:
-        df = filter_alarm_by_days(load_alarm_report(), days)
-        df = df[df["Alarm On-Site"].replace("", pd.NA).notna()]
-        result = (
-            df.groupby("Alarm On-Site")
-            .size()
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+
+        type_map = {}
+        for a in alarms:
+            name = (a.get("alarm_name") or "Unknown").strip()
+            type_map[name] = type_map.get(name, 0) + 1
+
+        return sorted(
+            [{"alarm_type": k, "count": v} for k, v in type_map.items()],
+            key=lambda x: x["count"], reverse=True,
         )
-        return [
-            {"alarm_type": row["Alarm On-Site"], "count": int(row["count"])}
-            for _, row in result.iterrows()
-        ]
     except HTTPException:
         raise
     except Exception as e:
@@ -2013,23 +2240,21 @@ def site_alarm_by_type(days: int = Query(7)):
 
 
 @app.get("/SITE-ALARM-BY-CIRCLE")
-def site_alarm_by_circle(days: int = Query(7)):
+def site_alarm_by_circle(date: str = None):
     try:
-        df = filter_alarm_by_days(load_alarm_report(), days)
-        col = next((c for c in df.columns if "circle" in c.lower() or "state" in c.lower()), None)
-        if not col:
-            return []
-        df = df[df[col].replace("", pd.NA).notna()]
-        result = (
-            df.groupby(col)
-            .size()
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+
+        circle_map = {}
+        for a in alarms:
+            circle = (a.get("state_name") or "").strip()
+            if circle:
+                circle_map[circle] = circle_map.get(circle, 0) + 1
+
+        return sorted(
+            [{"circle": k, "count": v} for k, v in circle_map.items()],
+            key=lambda x: x["count"], reverse=True,
         )
-        return [
-            {"circle": row[col], "count": int(row["count"])}
-            for _, row in result.iterrows()
-        ]
     except HTTPException:
         raise
     except Exception as e:
@@ -2037,28 +2262,337 @@ def site_alarm_by_circle(days: int = Query(7)):
 
 
 @app.get("/SITE-ACTIVE-BY-CIRCLE")
-def site_active_by_circle():
+def site_active_by_circle(date: str = None):
     try:
-        df = load_site_status()
-        col = next((c for c in df.columns if "circle" in c.lower() or "state" in c.lower()), None)
-        if not col:
-            return []
-        df = df[df[col].replace("", pd.NA).notna()]
-        result = (
-            df.groupby(col)
-            .size()
-            .reset_index(name="count")
-            .sort_values("count", ascending=False)
+        sites = fetch_all_sites()
+
+        # Build IMEI → circle from selected date's alarm data
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        imei_to_circle = {}
+        for a in alarms:
+            imei   = str(a.get("imei", "")).strip()
+            circle = (a.get("state_name") or "").strip()
+            if imei and circle and imei not in imei_to_circle:
+                imei_to_circle[imei] = circle
+
+        # Count active (non-critical-alarm) sites per circle
+        # Sites with a critical alarm today are "down" — skip them
+        down_imeis = set()
+        for a in alarms:
+            if is_critical_alarm(a):
+                down_imeis.add(str(a.get("imei", "")).strip())
+
+        circle_map = {}
+        for s in sites:
+            imei   = str(s.get("gsm_imei_no", "")).strip()
+            if imei in down_imeis:
+                continue
+            circle = imei_to_circle.get(imei) or \
+                     s.get("state") or s.get("state_name") or s.get("circle") or "Unknown"
+            circle = circle.strip() or "Unknown"
+            circle_map[circle] = circle_map.get(circle, 0) + 1
+
+        return sorted(
+            [{"circle": k, "count": v} for k, v in circle_map.items()],
+            key=lambda x: x["count"], reverse=True,
         )
-        return [
-            {"circle": row[col], "count": int(row["count"])}
-            for _, row in result.iterrows()
-        ]
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, str(e))
 
+
+
+def _fetch_days_parallel(dates: list) -> dict:
+    """Fetch alarm data for multiple dates in parallel. Returns {date: [alarms]}."""
+    daily = {}
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {ex.submit(fetch_alarm_data, d, d): d for d in dates}
+        for f in as_completed(futures):
+            d = futures[f]
+            try:
+                daily[d] = f.result()
+            except Exception as e:
+                print(f"⚠️  Parallel fetch error for {d}: {e}")
+                daily[d] = []
+    return daily
+
+
+@app.get("/CIRCLE-REPORT")
+def circle_report(rng: str = Query("today", alias="range")):
+    today     = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+
+    if rng == "yesterday":
+        dates       = [yesterday.strftime("%Y-%m-%d")]
+        period_days = 1
+    elif rng == "7days":
+        dates       = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+        period_days = 7
+    elif rng == "30days":
+        dates       = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(30)]
+        period_days = 30
+    else:  # today
+        dates       = [today.strftime("%Y-%m-%d")]
+        period_days = 1
+
+    sites      = fetch_all_sites()
+    daily_data = _fetch_days_parallel(dates)
+    all_alarms = [a for v in daily_data.values() for a in v]
+
+    def _fmt_alarm_time(dt_str):
+        if not dt_str or str(dt_str).strip() in ("", "None", "null"):
+            return "—"
+        try:
+            dt = datetime.strptime(str(dt_str).strip(), "%Y-%m-%d %H:%M:%S")
+            return dt.strftime("%I:%M %p")
+        except Exception:
+            return str(dt_str)
+
+    # Build IMEI→circle map (alarm data is most reliable)
+    imei_circle: dict = {}
+    for s in sites:
+        imei   = str(s.get("gsm_imei_no") or "").strip()
+        circle = (s.get("state") or s.get("state_name") or s.get("circle") or "").strip()
+        if imei and circle:
+            imei_circle[imei] = circle
+    for a in all_alarms:
+        imei   = str(a.get("imei") or "").strip()
+        circle = (a.get("state_name") or "").strip()
+        if imei and circle:
+            imei_circle[imei] = circle
+
+    # Group TPMS sites → circle (for total_sites count)
+    circle_imeis: dict = {}
+    for s in sites:
+        imei   = str(s.get("gsm_imei_no") or "").strip()
+        circle = imei_circle.get(imei) or "Unknown"
+        circle_imeis.setdefault(circle, set()).add(imei)
+
+    # Group alarms → circle → IMEI
+    circle_imei_alarms: dict = {}
+    for a in all_alarms:
+        imei   = str(a.get("imei") or "").strip()
+        circle = imei_circle.get(imei) or (a.get("state_name") or "Unknown").strip()
+        circle_imei_alarms.setdefault(circle, {}).setdefault(imei, []).append(a)
+
+    period_min = period_days * 1440
+    rows = []
+    for circle in sorted(set(circle_imeis) | set(circle_imei_alarms)):
+        if circle in ("Unknown", ""):
+            continue
+
+        total_sites      = len(circle_imeis.get(circle, set()))
+        imei_alarms_map  = circle_imei_alarms.get(circle, {})
+        circle_outage    = 0
+        down_sites_detail = []
+
+        for imei, site_alarms in imei_alarms_map.items():
+            crit = [a for a in site_alarms if is_critical_alarm(a)]
+            if not crit:
+                continue
+
+            crit_sorted  = sorted(crit, key=lambda x: x.get("start_time") or "")
+            all_resolved = all(not is_active_alarm(a) for a in crit)
+
+            down_time  = _fmt_alarm_time(crit_sorted[0].get("start_time"))
+            if all_resolved:
+                latest_end = max((a.get("end_time") or "") for a in crit)
+                restored   = _fmt_alarm_time(latest_end)
+            else:
+                restored = "Active"
+
+            outage_min = round(sum(_alarm_duration_min(a) or 0 for a in crit))
+            circle_outage += outage_min
+            uptime_pct = round(max(0.0, (period_min - outage_min) / period_min * 100), 2) if period_min > 0 else 100.0
+
+            alarm_names = ", ".join(sorted({
+                (a.get("alarm_name") or "").strip()
+                for a in site_alarms if a.get("alarm_name")
+            }))
+
+            cluster   = next((a.get("district_name") or a.get("district") for a in site_alarms
+                              if a.get("district_name") or a.get("district")), "—")
+            site_name = next((a.get("site_name") for a in site_alarms if a.get("site_name")), "—")
+
+            down_sites_detail.append({
+                "site_name":  site_name,
+                "cluster":    cluster or "—",
+                "down_time":  down_time,
+                "restored":   restored,
+                "outage_min": outage_min,
+                "uptime_pct": uptime_pct,
+                "alarm":      alarm_names,
+                "status":     "Closed" if all_resolved else "Active",
+                "imei":       imei,
+            })
+
+        down_sites_detail.sort(key=lambda x: x["outage_min"], reverse=True)
+
+        total_min  = period_min * total_sites
+        uptime_pct = round(max(0.0, (total_min - circle_outage) / total_min * 100), 2) if total_min > 0 else 100.0
+        rows.append({
+            "circle":      circle,
+            "total_sites": total_sites,
+            "sites_down":  len(down_sites_detail),
+            "outage_min":  circle_outage,
+            "uptime_pct":  uptime_pct,
+            "down_sites":  down_sites_detail,
+        })
+
+    rows.sort(key=lambda x: x["sites_down"], reverse=True)
+
+    total_row = {
+        "circle":      "Total",
+        "total_sites": sum(r["total_sites"] for r in rows),
+        "sites_down":  sum(r["sites_down"]  for r in rows),
+        "outage_min":  sum(r["outage_min"]  for r in rows),
+        "uptime_pct":  None,
+    }
+    return {
+        "rows":         rows,
+        "total":        total_row,
+        "generated_at": datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "range":        rng,
+    }
+
+
+@app.get("/ANALYTICS-DATA")
+def analytics_data_api(rng: str = Query("24h", alias="range")):
+    today     = datetime.now().date()
+    yesterday = today - timedelta(days=1)
+
+    if rng == "3d":
+        primary_days = 3
+    elif rng == "7d":
+        primary_days = 7
+    elif rng == "30d":
+        primary_days = 30
+    else:
+        primary_days = 1
+
+    primary_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(primary_days)]
+    # Always include yesterday for the 24-hour alarm timeline
+    all_dates     = sorted(set(primary_dates + [yesterday.strftime("%Y-%m-%d")]))
+
+    sites      = fetch_all_sites()
+    total_sites_count = len(sites)
+    daily_data = _fetch_days_parallel(all_dates)
+
+    primary_alarms = [a for d in primary_dates for a in daily_data.get(d, [])]
+    all_alarms_all = [a for v in daily_data.values() for a in v]
+
+    # ── Headline KPIs ──
+    critical_outage = sum(_alarm_duration_min(a) or 0 for a in primary_alarms if is_critical_alarm(a))
+    total_minutes   = primary_days * 1440 * total_sites_count
+    fleet_uptime    = round(max(0.0, (total_minutes - critical_outage) / total_minutes * 100), 1) if total_minutes > 0 else 100.0
+
+    resolved_crit   = [a for a in primary_alarms if is_critical_alarm(a) and not is_active_alarm(a)]
+    mttr_vals       = [v for a in resolved_crit if (v := _alarm_duration_min(a)) and v > 0]
+    mttr_min        = round(sum(mttr_vals) / len(mttr_vals), 1) if mttr_vals else 0
+
+    sites_down = len({str(a.get("imei")).strip() for a in primary_alarms
+                      if is_critical_alarm(a) and is_active_alarm(a)})
+    total_alarms = len(primary_alarms)
+
+    # ── Downtime by Reason ──
+    reason_map: dict = {}
+    for a in primary_alarms:
+        name = (a.get("alarm_name") or "Unknown").strip()
+        dur  = _alarm_duration_min(a) or 0
+        reason_map.setdefault(name, {"hours": 0.0, "count": 0})
+        reason_map[name]["hours"] += dur / 60
+        reason_map[name]["count"] += 1
+    downtime_by_reason = sorted(
+        [{"name": k, "hours": round(v["hours"], 1), "count": v["count"]} for k, v in reason_map.items()],
+        key=lambda x: x["hours"], reverse=True,
+    )[:10]
+
+    # ── Alarms by State ──
+    state_map: dict = {}
+    for a in primary_alarms:
+        s = (a.get("state_name") or "Unknown").strip()
+        state_map[s] = state_map.get(s, 0) + 1
+    state_total = sum(state_map.values()) or 1
+    alarms_by_state = sorted(
+        [{"name": k, "count": v, "pct": round(v / state_total * 100, 1)} for k, v in state_map.items()],
+        key=lambda x: x["count"], reverse=True,
+    )
+
+    # ── Resolve Trend (per day) ──
+    resolve_trend = []
+    for d in sorted(primary_dates):
+        day_res  = [a for a in daily_data.get(d, []) if not is_active_alarm(a)]
+        day_vals = [v for a in day_res if (v := _alarm_duration_min(a)) and v > 0]
+        resolve_trend.append({"date": d, "avg_min": round(sum(day_vals) / len(day_vals), 1) if day_vals else 0})
+
+    # ── Active vs Resolved (per day) ──
+    active_vs_resolved = []
+    for d in sorted(primary_dates):
+        day_alarms = daily_data.get(d, [])
+        active_vs_resolved.append({
+            "date":     d,
+            "active":   sum(1 for a in day_alarms if is_active_alarm(a)),
+            "resolved": sum(1 for a in day_alarms if not is_active_alarm(a)),
+        })
+
+    # ── Alarm Timeline (last 24 h hourly from all_alarms_all) ──
+    now = datetime.now()
+    bucket_times = [(now - timedelta(hours=23-i)) for i in range(24)]
+    # label includes full datetime so frontend can show "May 7, 05:00" in tooltip
+    buckets = [{"label": bt.strftime("%Y-%m-%d %H:00"), "tick": bt.strftime("%H:00"), "count": 0}
+               for bt in bucket_times]
+    for a in all_alarms_all:
+        st = a.get("start_time")
+        if not st:
+            continue
+        try:
+            t = datetime.strptime(str(st).strip(), "%Y-%m-%d %H:%M:%S")
+            diff = (now - t).total_seconds() / 3600
+            if 0 <= diff < 24:
+                idx = 23 - int(diff)
+                if 0 <= idx < 24:
+                    buckets[idx]["count"] += 1
+        except Exception:
+            pass
+
+    # ── Worst-Performing Sites ──
+    site_stats: dict = {}
+    for a in primary_alarms:
+        imei = str(a.get("imei") or "").strip()
+        if not imei:
+            continue
+        if imei not in site_stats:
+            site_stats[imei] = {
+                "site_name":  a.get("site_name") or "—",
+                "global_id":  a.get("globel_id") or "—",
+                "outage_min": 0, "alarm_count": 0,
+            }
+        site_stats[imei]["alarm_count"] += 1
+        if is_critical_alarm(a):
+            site_stats[imei]["outage_min"] += _alarm_duration_min(a) or 0
+
+    period_min = primary_days * 1440
+    worst_sites = []
+    for imei, s in site_stats.items():
+        downtime_h = round(s["outage_min"] / 60, 1)
+        uptime_pct = round(max(0.0, (period_min - s["outage_min"]) / period_min * 100), 1) if period_min > 0 else 100.0
+        worst_sites.append({**s, "imei": imei, "downtime_h": downtime_h, "uptime_pct": uptime_pct})
+    worst_sites = sorted(worst_sites, key=lambda x: x["downtime_h"], reverse=True)[:20]
+
+    return {
+        "fleet_uptime":       fleet_uptime,
+        "mttr_min":           mttr_min,
+        "sites_down":         sites_down,
+        "total_alarms":       total_alarms,
+        "downtime_by_reason": downtime_by_reason,
+        "alarms_by_state":    alarms_by_state,
+        "resolve_trend":      resolve_trend,
+        "active_vs_resolved": active_vs_resolved,
+        "alarm_timeline":     buckets,
+        "worst_sites":        worst_sites,
+    }
 
 
 class SendReportBody(PydanticBaseModel):
@@ -2623,29 +3157,38 @@ def preview_managers():
 # WFH / WFO ANALYSIS
 # =====================================================
 
-_DEFAULT_OFFICE_COORDS = {
-    "Delhi":        {"lat": 28.476166,   "lng": 77.093109},
-    "GJ":           None,
-    "KA":           {"lat": 12.971262,   "lng": 77.613021},
-    "Maharashtra":  {"lat": 18.566991,   "lng": 73.775431},
-    "Mumbai":       {"lat": 19.0652005,  "lng": 72.9993786},
-    "UPE":          {"lat": 26.867925,   "lng": 81.010461},
-    "UPW":          None,
-    "WB & Kolkata": {"lat": 22.572952,   "lng": 88.431080},
-    "MP & CG":      None,
-}
-
 _WFH_WFO_CONFIG_KEY = "wfh_wfo"
+_OFFICE_LOCS_PATH   = os.path.join("data", "office_locations.json")
+
+# Seed defaults used only when office_locations.json does not yet exist
+_DEFAULT_OFFICE_SEEDS = [
+    {"name": "Delhi",        "lat": 28.476166,  "lng": 77.093109},
+    {"name": "KA",           "lat": 12.971262,  "lng": 77.613021},
+    {"name": "Maharashtra",  "lat": 18.566991,  "lng": 73.775431},
+    {"name": "Mumbai",       "lat": 19.0652005, "lng": 72.9993786},
+    {"name": "UPE",          "lat": 26.867925,  "lng": 81.010461},
+    {"name": "WB & Kolkata", "lat": 22.572952,  "lng": 88.431080},
+]
+
+
+def _load_offices() -> list:
+    if os.path.exists(_OFFICE_LOCS_PATH):
+        with open(_OFFICE_LOCS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    _save_offices(_DEFAULT_OFFICE_SEEDS)
+    return list(_DEFAULT_OFFICE_SEEDS)
+
+
+def _save_offices(offices: list):
+    os.makedirs("data", exist_ok=True)
+    with open(_OFFICE_LOCS_PATH, "w", encoding="utf-8") as f:
+        json.dump(offices, f, indent=2)
 
 
 def _get_wfh_wfo_config():
-    """Returns the WFH/WFO threshold config. Office coords are always hardcoded."""
     from services.notification_service import _read_config
     cfg = _read_config().get(_WFH_WFO_CONFIG_KEY, {})
-    return {
-        "wfo_radius_km": cfg.get("wfo_radius_km", 2.0),
-        "wfh_travel_km": cfg.get("wfh_travel_km", 2.0),
-    }
+    return {"wfh_travel_km": cfg.get("wfh_travel_km", 2.0)}
 
 
 def _save_wfh_wfo_config(new_cfg: dict):
@@ -2666,19 +3209,64 @@ def haversine_km(lat1, lon1, lat2, lon2):
 WFH_WFO_RESULTS_PATH = os.path.join("data", "wfh_wfo_results.json")
 
 
+# ── Office location CRUD ─────────────────────────────────────────────
+
+@app.get("/WFH-WFO/OFFICES")
+def get_offices():
+    return _load_offices()
+
+
+class OfficeBody(PydanticBaseModel):
+    name: str
+    lat:  float
+    lng:  float
+
+
+@app.post("/WFH-WFO/OFFICES")
+def add_office(body: OfficeBody):
+    offices = _load_offices()
+    if any(o["name"] == body.name for o in offices):
+        raise HTTPException(400, f"Office '{body.name}' already exists")
+    offices.append({"name": body.name, "lat": body.lat, "lng": body.lng})
+    _save_offices(offices)
+    return offices
+
+
+@app.put("/WFH-WFO/OFFICES/{name}")
+def update_office(name: str, body: OfficeBody):
+    offices = _load_offices()
+    for o in offices:
+        if o["name"] == name:
+            o["name"] = body.name
+            o["lat"]  = body.lat
+            o["lng"]  = body.lng
+            _save_offices(offices)
+            return offices
+    raise HTTPException(404, f"Office '{name}' not found")
+
+
+@app.delete("/WFH-WFO/OFFICES/{name}")
+def delete_office(name: str):
+    offices = _load_offices()
+    offices = [o for o in offices if o["name"] != name]
+    _save_offices(offices)
+    return offices
+
+
+# ── WFH/WFO threshold config ─────────────────────────────────────────
+
 @app.get("/WFH-WFO/CONFIG")
 def get_wfh_wfo_config():
     return _get_wfh_wfo_config()
 
 
 class WfhWfoConfigBody(PydanticBaseModel):
-    wfo_radius_km: float = 2.0
     wfh_travel_km: float = 2.0
 
 
 @app.put("/WFH-WFO/CONFIG")
 def update_wfh_wfo_config(body: WfhWfoConfigBody):
-    _save_wfh_wfo_config({"wfo_radius_km": body.wfo_radius_km, "wfh_travel_km": body.wfh_travel_km})
+    _save_wfh_wfo_config({"wfh_travel_km": body.wfh_travel_km})
     return _get_wfh_wfo_config()
 
 
@@ -2700,8 +3288,11 @@ def wfh_wfo_clear():
 @app.post("/WFH-WFO/ANALYZE")
 async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
     cfg        = _get_wfh_wfo_config()
-    wfo_radius = cfg["wfo_radius_km"]
     wfh_travel = cfg["wfh_travel_km"]
+    offices    = _load_offices()
+
+    # Pre-compute rounded office coordinates (4 dp ≈ 11 m precision)
+    office_pts = [(o["name"], round(o["lat"], 4), round(o["lng"], 4)) for o in offices]
 
     results = []
 
@@ -2709,7 +3300,7 @@ async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
         filename = upload.filename or "unknown"
         try:
             raw = await upload.read()
-            df = pd.read_csv(BytesIO(raw), dtype=str, encoding="utf-8-sig")
+            df  = pd.read_csv(BytesIO(raw), dtype=str, encoding="utf-8-sig")
             df.columns = df.columns.str.strip()
 
             # Extract username from tracker_id (format: devicehex@username)
@@ -2723,42 +3314,22 @@ async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
                 continue
             username = tracker_sample.split("@")[-1].strip()
 
-            # Filter out zero-coordinate rows
             if "lat" not in df.columns or "lng" not in df.columns:
                 results.append({"file": filename, "username": username, "error": "Missing 'lat' or 'lng' column"})
                 continue
 
             df["lat"] = pd.to_numeric(df["lat"], errors="coerce")
             df["lng"] = pd.to_numeric(df["lng"], errors="coerce")
-            valid_pts = df[(df["lat"] != 0) & (df["lng"] != 0) & df["lat"].notna() & df["lng"].notna()]
-
+            valid_pts = df[
+                (df["lat"] != 0) & (df["lng"] != 0) &
+                df["lat"].notna() & df["lng"].notna()
+            ]
             total_points = len(valid_pts)
-
-            # Check if any office coordinates exist at all (hardcoded)
-            available_offices = {
-                k: (v["lat"], v["lng"]) if isinstance(v, dict) else v
-                for k, v in _DEFAULT_OFFICE_COORDS.items()
-                if v is not None
-            }
-
-            if not available_offices:
-                results.append({
-                    "username":        username,
-                    "circle":          None,
-                    "status":          "WFH (No Office)",
-                    "min_distance_km": None,
-                    "total_points":    total_points,
-                })
-                continue
 
             if total_points == 0:
                 results.append({
-                    "username":          username,
-                    "circle":            None,
-                    "status":            "WFH",
-                    "min_distance_km":   None,
-                    "total_travel_km":   0.0,
-                    "total_points":      0,
+                    "username": username, "status": "WFH",
+                    "matched_office": None, "total_travel_km": 0.0, "total_points": 0,
                 })
                 continue
 
@@ -2766,45 +3337,40 @@ async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
             lats = valid_pts["lat"].to_numpy(dtype=float)
             lngs = valid_pts["lng"].to_numpy(dtype=float)
 
-            # ── Min distance to nearest office (vectorized) ──────────────
-            best_circle   = None
-            best_distance = float("inf")
+            # ── WFO: exact coordinate match (rounded to 4 decimal places) ──
+            matched_office = None
+            if office_pts:
+                user_rounded = set(zip(np.round(lats, 4), np.round(lngs, 4)))
+                for o_name, o_lat, o_lng in office_pts:
+                    if (o_lat, o_lng) in user_rounded:
+                        matched_office = o_name
+                        break
 
-            for circle_name, coords in available_offices.items():
-                off_lat, off_lng = coords
-                dlat = np.radians(off_lat - lats)
-                dlon = np.radians(off_lng - lngs)
-                a = (np.sin(dlat/2)**2
-                     + np.cos(np.radians(lats)) * np.cos(off_lat * np.pi/180) * np.sin(dlon/2)**2)
-                dists = 6371 * 2 * np.arctan2(np.sqrt(a), np.sqrt(1 - a))
-                min_d = float(dists.min())
-                if min_d < best_distance:
-                    best_distance = min_d
-                    best_circle   = circle_name
-
-            # ── Total travel distance (sum of consecutive point distances) ─
+            # ── Total travel distance ────────────────────────────────────
             if len(lats) >= 2:
                 dlat_c = np.radians(lats[1:] - lats[:-1])
                 dlon_c = np.radians(lngs[1:] - lngs[:-1])
-                a_c = (np.sin(dlat_c/2)**2
-                       + np.cos(np.radians(lats[:-1])) * np.cos(np.radians(lats[1:])) * np.sin(dlon_c/2)**2)
+                a_c    = (np.sin(dlat_c/2)**2
+                          + np.cos(np.radians(lats[:-1])) * np.cos(np.radians(lats[1:]))
+                          * np.sin(dlon_c/2)**2)
                 total_travel_km = float((6371 * 2 * np.arctan2(np.sqrt(a_c), np.sqrt(1 - a_c))).sum())
             else:
                 total_travel_km = 0.0
 
-            # ── WFO: within wfo_radius of office   WFH: travelled ≥ wfh_travel ──
-            if best_distance <= wfo_radius:
+            # ── Decision ────────────────────────────────────────────────
+            if matched_office:
                 status = "WFO"
+            elif total_travel_km >= wfh_travel:
+                status = "WFH"
             else:
-                status = "WFH"  # any outdoor movement or insufficient movement
+                status = "WFH"  # not at office, minimal movement — still WFH
 
             results.append({
-                "username":          username,
-                "circle":            best_circle,
-                "status":            status,
-                "min_distance_km":   round(best_distance, 4),
-                "total_travel_km":   round(total_travel_km, 4),
-                "total_points":      total_points,
+                "username":        username,
+                "status":          status,
+                "matched_office":  matched_office,
+                "total_travel_km": round(total_travel_km, 4),
+                "total_points":    total_points,
             })
 
         except Exception as e:
