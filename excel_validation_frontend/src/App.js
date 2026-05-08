@@ -19,6 +19,7 @@ import SiteMonitoring from "./SiteMonitoring";
 import CreateForm from "./CreateForm";
 import Rules from "./Rules";
 import EmailReports from "./EmailReports";
+import SiteVisit from "./SiteVisit";
 
 /* Logo */
 import logo from "./assets/logo.png";
@@ -31,6 +32,7 @@ import {
   FileSpreadsheet,
   BarChart2,
   MapPin,
+  Navigation2,
   BookOpen,
   LogOut,
   Bell,
@@ -93,6 +95,7 @@ const NAV_ITEMS = [
   { label: "Form Data",       icon: FileSpreadsheet,  path: "/form-data" },
   { label: "Analytics",       icon: BarChart2,        path: "/analytics" },
   { label: "Site Monitoring", icon: MapPin,           path: "/site-monitoring" },
+  { label: "Site Visit",     icon: Navigation2,      path: "/site-visit" },
   { label: "Reporting",       icon: Mail,             path: "/email-reports" },
   { label: "Rules Validation", icon: FileSpreadsheet, path: "/create-form" },
 ];
@@ -553,6 +556,7 @@ const Layout = () => {
             <Route path="/analytics"       element={<Analytics />} />
             <Route path="/site-monitoring" element={<SiteMonitoring />} />
             <Route path="/email-reports"  element={<EmailReports />} />
+            <Route path="/site-visit"     element={<SiteVisit />} />
             <Route path="*"               element={<Navigate to="/dashboard" />} />
           </Routes>
         </div>
