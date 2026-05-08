@@ -302,7 +302,7 @@ export default function SiteVisit() {
 
       /* Detect coordinate columns */
       let colLat = ci("latitude", "lat");
-      let colLng = ci("longitude", "lon", "long");
+      let colLng = ci("longitude", "lon", "long", "lng");
       let colCombined = -1;
 
       if (colLat !== -1 && colLng !== -1 && colLat !== colLng) {

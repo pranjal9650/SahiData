@@ -50,23 +50,23 @@ const T = {
   redLight:  "rgba(204,0,0,0.07)",
   black:     "#111111",
   white:     "#FFFFFF",
-  grey100:   "#F7F5F0",
-  grey200:   "#E5E2DC",
+  grey100:   "#F5F5F5",
+  grey200:   "#E5E7EB",
   grey500:   "#6B7280",
-  border:    "#E5E2DC",
+  border:    "#E5E7EB",
 };
 
 /* ─── Theme tokens ───────────────────────────────────────────── */
 const THEME_TOKENS = {
   light: {
-    bg:           "#F7F5F0",
+    bg:           "#FFFFFF",
     surface:      "#FFFFFF",
-    border:       "#E5E2DC",
+    border:       "#E5E7EB",
     text:         "#111111",
     muted:        "#6B7280",
     headerBg:     "#FFFFFF",
-    headerBorder: "#E5E2DC",
-    inputBg:      "#F2F0EB",
+    headerBorder: "#E5E7EB",
+    inputBg:      "#F5F5F5",
   },
   dark: {
     bg:           "#0F0F0F",
@@ -144,7 +144,7 @@ function RulesValidationPage() {
         {/* ── Header: icon + title + tab switcher ── */}
         <div style={{
           padding: "12px 20px 0",
-          background: "#FAFAF8",
+          background: "#FFFFFF",
           borderBottom: `1px solid ${T.border}`,
         }}>
           {/* Top row: icon + active tab title */}
@@ -352,25 +352,15 @@ const Layout = () => {
   const navigate = useNavigate();
 
   const [themePref, setThemePref] = useState(() => {
-    return localStorage.getItem("themePref") || "system";
+    const stored = localStorage.getItem("themePref");
+    return stored === "light" ? "light" : "light";
   });
 
   useEffect(() => {
-    localStorage.setItem("themePref", themePref);
-  }, [themePref]);
-
-  const [systemDark, setSystemDark] = useState(
-    () => window.matchMedia("(prefers-color-scheme: dark)").matches
-  );
-  useEffect(() => {
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = (e) => setSystemDark(e.matches);
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
+    localStorage.setItem("themePref", "light");
   }, []);
 
-  const resolvedTheme = themePref === "system" ? (systemDark ? "dark" : "light") : themePref;
-  const th = THEME_TOKENS[resolvedTheme];
+  const th = THEME_TOKENS["light"];
 
   const handleLogout = () => {
     localStorage.removeItem("isLoggedIn");
@@ -466,13 +456,6 @@ const Layout = () => {
                 pointerEvents: "none",
               }} />
             </div>
-
-            {/* Theme dropdown */}
-            <ThemeDropdown
-              themePref={themePref}
-              setThemePref={setThemePref}
-              themeTokens={th}
-            />
 
             {/* Divider */}
             <div style={{ width: 1, height: 22, background: th.border, margin: "0 6px" }} />

@@ -26,8 +26,8 @@ button { font-family: inherit; }
 /* ── Scrollbar ──────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #D4CFC8; border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: #B5B0A8; }
+::-webkit-scrollbar-thumb { background: #D1D5DB; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #9CA3AF; }
 
 /* ── Animations ─────────────────────────────────────── */
 @keyframes spin {
@@ -52,7 +52,7 @@ button { font-family: inherit; }
   display: flex;
   justify-content: center;
   align-items: center;
-  background: linear-gradient(135deg, #111111 0%, #0D0D0D 50%, #111111 100%);
+  background: #FFFFFF;
   position: relative;
   overflow: hidden;
 }
@@ -62,8 +62,8 @@ button { font-family: inherit; }
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 20% 80%, rgba(204,0,0,0.14) 0%, transparent 50%),
-    radial-gradient(circle at 80% 20%, rgba(204,0,0,0.09) 0%, transparent 50%);
+    radial-gradient(circle at 20% 80%, rgba(204,0,0,0.07) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(204,0,0,0.05) 0%, transparent 50%);
 }
 
 .login-card {
@@ -72,7 +72,7 @@ button { font-family: inherit; }
   border-radius: 20px;
   width: 100%;
   max-width: 420px;
-  box-shadow: 0 20px 60px rgba(0,0,0,0.22);
+  box-shadow: 0 4px 32px rgba(0,0,0,0.10), 0 0 0 1px #E5E7EB;
   text-align: center;
   position: relative;
   z-index: 1;
@@ -111,12 +111,12 @@ button { font-family: inherit; }
   width: 100%;
   padding: 13px 16px;
   border-radius: 10px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   font-size: 14px;
   font-family: 'DM Sans', sans-serif;
   color: #111;
   outline: none;
-  background: #F2F0EB;
+  background: #F5F5F5;
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
@@ -180,11 +180,11 @@ button { font-family: inherit; }
 .form-control {
   padding: 12px 14px;
   border-radius: 10px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   font-size: 14px;
   font-family: 'DM Sans', sans-serif;
   color: #111;
-  background: #F2F0EB;
+  background: #F5F5F5;
   outline: none;
   transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
@@ -199,8 +199,8 @@ button { font-family: inherit; }
 
 .form-group input[type="file"] {
   padding: 10px 12px;
-  border: 2px dashed #E5E2DC;
-  background: #F2F0EB;
+  border: 2px dashed #E5E7EB;
+  background: #F5F5F5;
   cursor: pointer;
 }
 
@@ -265,7 +265,7 @@ button { font-family: inherit; }
   background: #ffffff;
   border-radius: 14px;
   padding: 24px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   box-shadow: 0 1px 6px rgba(0,0,0,0.06);
   transition: box-shadow 0.18s;
 }
@@ -278,7 +278,7 @@ button { font-family: inherit; }
   align-items: center;
   margin-bottom: 18px;
   padding-bottom: 14px;
-  border-bottom: 1px solid #E5E2DC;
+  border-bottom: 1px solid #E5E7EB;
 }
 
 .card-title {
@@ -312,7 +312,7 @@ button { font-family: inherit; }
   background: #ffffff;
   border-radius: 14px;
   overflow-x: auto;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   box-shadow: 0 1px 6px rgba(0,0,0,0.05);
   -webkit-overflow-scrolling: touch;
 }
@@ -325,7 +325,7 @@ button { font-family: inherit; }
 }
 
 .history-table th {
-  background: #F7F5F0;
+  background: #F5F5F5;
   color: #6B7280;
   text-align: left;
   font-size: 11px;
@@ -333,18 +333,18 @@ button { font-family: inherit; }
   padding: 12px 18px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  border-bottom: 1px solid #E5E2DC;
+  border-bottom: 1px solid #E5E7EB;
 }
 
 .history-table td {
   padding: 13px 18px;
-  border-bottom: 1px solid #E5E2DC;
+  border-bottom: 1px solid #E5E7EB;
   color: #111111;
   line-height: 1.6;
 }
 
 .history-table tbody tr:last-child td { border-bottom: none; }
-.history-table tbody tr:hover td { background: #FDFCF9; }
+.history-table tbody tr:hover td { background: #FFF5F5; }
 
 /* ════════════════════════════════════════════════════════
    UPLOAD PAGE
@@ -362,7 +362,7 @@ button { font-family: inherit; }
   border-radius: 16px;
   width: 100%;
   max-width: 520px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   box-shadow: 0 4px 24px rgba(0,0,0,0.08);
   animation: fadeIn 0.3s ease;
 }
@@ -388,17 +388,17 @@ button { font-family: inherit; }
   padding: 16px;
   background: #ffffff;
   border-radius: 12px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
 }
 
 .filters-container input,
 .filters-container select {
   padding: 9px 13px;
   border-radius: 8px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   font-size: 13.5px;
   font-family: 'DM Sans', sans-serif;
-  background: #F2F0EB;
+  background: #F5F5F5;
   color: #111;
   outline: none;
   min-width: 150px;
@@ -418,7 +418,7 @@ button { font-family: inherit; }
 .loader {
   width: 44px;
   height: 44px;
-  border: 3px solid #E5E2DC;
+  border: 3px solid #E5E7EB;
   border-top: 3px solid #CC0000;
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
@@ -454,9 +454,9 @@ button { font-family: inherit; }
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: #F2F0EB;
+  background: #F5F5F5;
   border-radius: 8px;
-  border: 1px solid #E5E2DC;
+  border: 1px solid #E5E7EB;
   cursor: pointer;
   font-size: 13.5px;
   transition: border-color 0.15s, background 0.15s;
