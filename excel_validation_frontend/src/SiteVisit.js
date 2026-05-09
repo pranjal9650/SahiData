@@ -172,7 +172,14 @@ function fmtTime(val) {
   if (!val && val !== 0) return "–";
   const s = String(val).trim();
   if (!s) return "–";
-  let d = new Date(s);
+  let d;
+  if (/^\d{9,13}$/.test(s)) {
+    // Unix timestamp: 10 digits = seconds, 13 digits = milliseconds
+    const ms = s.length <= 10 ? Number(s) * 1000 : Number(s);
+    d = new Date(ms);
+  } else {
+    d = new Date(s);
+  }
   if (isNaN(d.getTime())) return s;
   const dd  = String(d.getDate()).padStart(2, "0");
   const mon = MONTHS[d.getMonth()];
