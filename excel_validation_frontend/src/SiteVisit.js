@@ -716,8 +716,23 @@ export default function SiteVisit() {
               background: uploadMsg.type === "success" ? T.greenBg : T.redLight,
               color:      uploadMsg.type === "success" ? T.green   : T.red,
               border:     `1px solid ${uploadMsg.type === "success" ? "rgba(21,128,61,0.2)" : "rgba(204,0,0,0.2)"}`,
+              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
             }}>
-              {uploadMsg.text}
+              <span>{uploadMsg.text}</span>
+              {uploadMsg.type === "success" && activeReport && (
+                <button
+                  onClick={downloadExcel}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "5px 12px", borderRadius: 6,
+                    background: T.green, color: "#fff",
+                    border: "none", fontSize: 12, fontWeight: 700,
+                    fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+                  }}
+                >
+                  <Download size={12} /> Download Excel
+                </button>
+              )}
             </div>
           )}
         </div>
