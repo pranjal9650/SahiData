@@ -166,6 +166,22 @@ function fmtDist(m) {
   return m < 1000 ? `${m} m` : `${(m / 1000).toFixed(1)} km`;
 }
 
+/* ── Time formatter ───────────────────────────────────────────── */
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtTime(val) {
+  if (!val && val !== 0) return "–";
+  const s = String(val).trim();
+  if (!s) return "–";
+  let d = new Date(s);
+  if (isNaN(d.getTime())) return s;
+  const dd  = String(d.getDate()).padStart(2, "0");
+  const mon = MONTHS[d.getMonth()];
+  const hh  = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const sec = String(d.getSeconds()).padStart(2, "0");
+  return `${dd} ${mon} ${hh}:${min}:${sec}`;
+}
+
 /* ═══════════════════════════════════════════════════════════════ */
 /*  Main Component                                                 */
 /* ═══════════════════════════════════════════════════════════════ */
@@ -522,7 +538,7 @@ export default function SiteVisit() {
       r.distanceMeters != null
         ? (r.distanceMeters < 1000 ? r.distanceMeters + " m" : (r.distanceMeters / 1000).toFixed(1) + " km")
         : "",
-      r.timeOfVisit || "",
+      fmtTime(r.timeOfVisit),
       r.status      || "",
     ]);
     const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
@@ -935,7 +951,7 @@ export default function SiteVisit() {
                           }}>{d}</span>
                         ) : "–"}
                       </td>
-                      <td style={{ padding: "10px 13px", fontSize: 12, color: T.grey500, whiteSpace: "nowrap" }}>{r.timeOfVisit || "–"}</td>
+                      <td style={{ padding: "10px 13px", fontSize: 12, color: T.grey500, whiteSpace: "nowrap" }}>{fmtTime(r.timeOfVisit)}</td>
                       <td style={{ padding: "10px 13px" }}><StatusPill status={r.status} /></td>
                     </tr>
                   );
