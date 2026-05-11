@@ -27,7 +27,7 @@ function Login() {
     if (!email || !password) { setError("Please enter both email and password."); return; }
     setLoading(true); setError("");
     setTimeout(() => {
-      if (email === "admin@gmail.com" && password === "1234") {
+      if (email === "admin@shaurryatele.com" && password === "1234") {
         localStorage.setItem("isLoggedIn", "true");
         navigate("/dashboard");
       } else {
@@ -228,7 +228,7 @@ function Login() {
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               <label style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Email address</label>
               <input
-                type="email" placeholder="admin@gmail.com" value={email}
+                type="email" placeholder="admin@shaurryatele.com" value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 onFocus={() => setFocused("email")} onBlur={() => setFocused(null)}
                 style={inputStyle("email")}
@@ -270,24 +270,6 @@ function Login() {
             </button>
           </form>
 
-          {/* Divider */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "28px 0 20px" }}>
-            <div style={{ flex: 1, height: 1, background: T.grey200 }} />
-            <span style={{ fontSize: 12, color: T.muted, whiteSpace: "nowrap" }}>default credentials</span>
-            <div style={{ flex: 1, height: 1, background: T.grey200 }} />
-          </div>
-
-          {/* Credentials */}
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1, padding: "10px 14px", borderRadius: 10, background: T.grey100, border: `1px solid ${T.grey200}` }}>
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: T.muted, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 4 }}>Email</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: T.text, fontFamily: "monospace" }}>admin@gmail.com</div>
-            </div>
-            <div style={{ flex: 1, padding: "10px 14px", borderRadius: 10, background: T.grey100, border: `1px solid ${T.grey200}` }}>
-              <div style={{ fontSize: 10.5, fontWeight: 600, color: T.muted, textTransform: "uppercase", letterSpacing: "0.6px", marginBottom: 4 }}>Password</div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: T.text, fontFamily: "monospace" }}>1234</div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

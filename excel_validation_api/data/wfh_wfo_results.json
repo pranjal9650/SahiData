@@ -1,0 +1,33 @@
+{
+  "results": [
+    {
+      "username": "ankaj_st",
+      "status": "WFH",
+      "matched_office": null,
+      "total_travel_km": 182.5386,
+      "total_points": 6492
+    },
+    {
+      "username": "adesh_st",
+      "status": "WFH",
+      "matched_office": null,
+      "total_travel_km": 77.6481,
+      "total_points": 3172
+    },
+    {
+      "username": "abhiman_st",
+      "status": "WFO",
+      "matched_office": "WB & Kolkata",
+      "total_travel_km": 36.4402,
+      "total_points": 1557
+    },
+    {
+      "username": "afsar_st",
+      "status": "WFH",
+      "matched_office": null,
+      "total_travel_km": 38.9153,
+      "total_points": 821
+    }
+  ],
+  "analyzed_at": "2026-05-09T15:33:54.424501"
+}

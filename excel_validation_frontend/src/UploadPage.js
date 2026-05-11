@@ -301,7 +301,7 @@ function UploadPage() {
   const [dynamicForms, setDynamicForms] = useState([]);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/GET-FORM-NAMES")
+    fetch("http://127.0.0.1:8001/GET-FORM-NAMES")
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -335,7 +335,7 @@ function UploadPage() {
     formData.append("date", selectedDate);
 
     try {
-      const res    = await fetch("http://127.0.0.1:8000/VALIDATE-FORM", {
+      const res    = await fetch("http://127.0.0.1:8001/VALIDATE-FORM", {
         method: "POST",
         body: formData,
       });

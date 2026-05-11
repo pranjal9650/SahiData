@@ -11,7 +11,7 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = "http://127.0.0.1:8001";
 
 const T = {
   red:     "#CC0000",
@@ -658,6 +658,11 @@ function SearchBox({ value, onChange, placeholder = "Search…", width = 220 }) 
 // ── Main component ────────────────────────────────────────────────────
 
 const SiteMonitoring = () => {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const [selectedDate,  setSelectedDate]  = useState(todayISO);
+  const [refreshing,    setRefreshing]    = useState(false);
+  const [lastUpdated,   setLastUpdated]   = useState(null);
+
   const [summary,      setSummary]      = useState(null);
   const [alarms,       setAlarms]       = useState([]);
   const [siteList,     setSiteList]     = useState([]);
@@ -691,23 +696,23 @@ const SiteMonitoring = () => {
   const [analyticsRange,   setAnalyticsRange]   = useState("24h");
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  useEffect(() => { fetchAll(); }, []); // eslint-disable-line
+  useEffect(() => { fetchAll(); }, [selectedDate]); // eslint-disable-line
 
-  const fetchAll = async () => {
-    setLoading(true);
+  const fetchAll = async (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
     try {
-      const [summRes, alarmsRes, siteRes] = await Promise.allSettled([
-        axios.get(`${BASE_URL}/SITE-MONITORING`),
-        axios.get(`${BASE_URL}/SITE-ALARMS`),
-        axios.get(`${BASE_URL}/SITE-ACTIVE-LIST`),
-      ]);
-      if (summRes.status === "fulfilled")  setSummary(summRes.value.data);
-      if (alarmsRes.status === "fulfilled") setAlarms(alarmsRes.value.data || []);
-      if (siteRes.status === "fulfilled")  setSiteList(siteRes.value.data || []);
+      const res = await axios.get(`${BASE_URL}/SITE-MONITORING-ALL?date=${selectedDate}`);
+      const d = res.data;
+      setSummary(d.summary || null);
+      setAlarms(d.alarms || []);
+      setSiteList(d.site_list || []);
+      setLastUpdated(new Date());
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -859,6 +864,117 @@ const SiteMonitoring = () => {
         />
       )}
 
+      {/* ── Header bar ── */}
+      <div style={{
+        background: T.white, borderRadius: 14, border: `1px solid ${T.grey200}`,
+        padding: "16px 22px", display: "flex", alignItems: "center",
+        justifyContent: "space-between", flexWrap: "wrap", gap: 12,
+        boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+      }}>
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 800, color: T.text, margin: 0, letterSpacing: "-0.4px" }}>
+            Site Monitoring
+          </h2>
+          <p style={{ fontSize: 12, color: T.muted, margin: "3px 0 0", fontWeight: 500 }}>
+            {lastUpdated
+              ? `Last updated: ${lastUpdated.toLocaleTimeString()} · Showing: ${selectedDate}`
+              : `Showing: ${selectedDate}`}
+          </p>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {/* Date pill label */}
+          <span style={{ fontSize: 12, fontWeight: 600, color: T.muted }}>Date</span>
+
+          {/* Date picker */}
+          <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+            <input
+              type="date"
+              value={selectedDate}
+              max={todayISO}
+              onChange={e => {
+                setSelectedDate(e.target.value);
+                setTab("feed");
+              }}
+              style={{
+                height: 36, padding: "0 36px 0 12px",
+                borderRadius: 9, border: `1.5px solid ${T.grey200}`,
+                background: T.white, fontSize: 13,
+                fontFamily: "'DM Sans', sans-serif",
+                color: T.text, outline: "none", cursor: "pointer",
+                fontWeight: 500, transition: "border-color 0.15s",
+              }}
+              onFocus={e => { e.currentTarget.style.borderColor = T.red; e.currentTarget.style.boxShadow = "0 0 0 3px rgba(204,0,0,0.08)"; }}
+              onBlur={e => { e.currentTarget.style.borderColor = T.grey200; e.currentTarget.style.boxShadow = "none"; }}
+            />
+          </div>
+
+          {/* Today shortcut */}
+          {selectedDate !== todayISO && (
+            <button
+              onClick={() => setSelectedDate(todayISO)}
+              style={{
+                height: 36, padding: "0 14px", borderRadius: 9,
+                border: `1.5px solid ${T.grey200}`,
+                background: T.white, color: T.muted,
+                fontSize: 12.5, fontWeight: 600, cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = T.red; e.currentTarget.style.color = T.red; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = T.grey200; e.currentTarget.style.color = T.muted; }}
+            >
+              Today
+            </button>
+          )}
+
+          {/* Divider */}
+          <div style={{ width: 1, height: 24, background: T.grey200 }} />
+
+          {/* Refresh */}
+          <button
+            onClick={() => fetchAll(true)}
+            disabled={refreshing}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              height: 36, padding: "0 16px", borderRadius: 9,
+              border: `1.5px solid ${T.grey200}`,
+              background: refreshing ? T.grey100 : T.white,
+              color: refreshing ? T.muted : T.text,
+              fontSize: 13, fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif",
+              cursor: refreshing ? "not-allowed" : "pointer",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={e => { if (!refreshing) { e.currentTarget.style.borderColor = T.red; e.currentTarget.style.color = T.red; } }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = T.grey200; e.currentTarget.style.color = refreshing ? T.muted : T.text; }}
+          >
+            {refreshing ? (
+              <>
+                <div style={{ width: 12, height: 12, borderRadius: "50%", border: `2px solid ${T.grey200}`, borderTop: `2px solid ${T.red}`, animation: "_spin 0.75s linear infinite" }} />
+                Refreshing…
+              </>
+            ) : (
+              <>
+                <RefreshCw size={13} />
+                Refresh
+              </>
+            )}
+          </button>
+
+          {/* Historical badge */}
+          {selectedDate !== todayISO && (
+            <span style={{
+              fontSize: 11.5, fontWeight: 700, padding: "4px 10px",
+              borderRadius: 99, background: "rgba(217,119,6,0.1)",
+              color: T.amber, border: "1px solid rgba(217,119,6,0.2)",
+            }}>
+              Historical
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* ── KPI cards ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12 }}>
         <KpiCard label="Total Sites"  value={summary.total_sites}  icon={Layers}        accent={T.blue}  bg={T.blueBg} />
@@ -879,7 +995,7 @@ const SiteMonitoring = () => {
             <Tab active={tab === "analytics"} onClick={() => setTab("analytics")} icon={Activity}>Analytics</Tab>
           </div>
           <button
-            onClick={fetchAll}
+            onClick={() => fetchAll(true)}
             style={{ background: "none", border: `1px solid ${T.grey200}`, borderRadius: 7, padding: "5px 12px", fontSize: 12, color: T.muted, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, fontFamily: "'DM Sans', sans-serif", flexShrink: 0 }}
           >
             <RefreshCw size={11} /> Refresh

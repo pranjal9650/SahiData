@@ -431,32 +431,6 @@ const Layout = () => {
           {/* Right: actions */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, marginLeft: 16 }}>
 
-            {/* Notification bell */}
-            <div style={{ position: "relative" }}>
-              <button
-                aria-label="Notifications"
-                style={{
-                  width: 36, height: 36, borderRadius: "50%",
-                  border: "none",
-                  background: "transparent",
-                  color: th.muted,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: "pointer", transition: "all 0.15s ease", padding: 0,
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(0,0,0,0.06)"; e.currentTarget.style.color = T.black; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = th.muted; }}
-              >
-                <Bell size={17} />
-              </button>
-              <span style={{
-                position: "absolute", top: 6, right: 6,
-                width: 7, height: 7, borderRadius: "50%",
-                background: T.red,
-                border: `1.5px solid ${th.headerBg}`,
-                pointerEvents: "none",
-              }} />
-            </div>
-
             {/* Divider */}
             <div style={{ width: 1, height: 22, background: th.border, margin: "0 6px" }} />
 
@@ -470,13 +444,13 @@ const Layout = () => {
                 letterSpacing: 0.5,
                 flexShrink: 0,
               }}>
-                PG
+                A
               </div>
               <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: th.text, whiteSpace: "nowrap" }}>
-                  Pranjal Gupta
+                  Admin
                 </span>
-                <span style={{ fontSize: 11, color: th.muted, marginTop: 2 }}>Admin</span>
+                <span style={{ fontSize: 11, color: th.muted, marginTop: 2 }}>Administrator</span>
               </div>
             </div>
 

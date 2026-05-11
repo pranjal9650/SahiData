@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
   LineChart, Line, BarChart, Bar,
@@ -10,7 +10,7 @@ import {
   Search, X, MapPin, Activity, Radio, Globe,
 } from "lucide-react";
 
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = "http://127.0.0.1:8001";
 
 const T = {
   red:      "#CC0000",
@@ -272,26 +272,17 @@ const SiteDashboard = () => {
   const fetchAll = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
-    const p = `?date=${selectedDate}`;
     try {
-      const [sRes, alRes, alListRes, trendRes, typeRes, circleRes, acRes, dsRes] = await Promise.allSettled([
-        axios.get(`${BASE_URL}/SITE-DASHBOARD-STATS${p}`),
-        axios.get(`${BASE_URL}/SITE-ACTIVE-LIST`),
-        axios.get(`${BASE_URL}/SITE-ALARM-LIST${p}`),
-        axios.get(`${BASE_URL}/SITE-ALARM-TREND${p}`),
-        axios.get(`${BASE_URL}/SITE-ALARM-BY-TYPE${p}`),
-        axios.get(`${BASE_URL}/SITE-ALARM-BY-CIRCLE${p}`),
-        axios.get(`${BASE_URL}/SITE-ACTIVE-BY-CIRCLE${p}`),
-        axios.get(`${BASE_URL}/SITE-DOWN-LIST${p}`),
-      ]);
-      if (sRes.status === "fulfilled")      setStats(sRes.value.data);
-      if (alRes.status === "fulfilled")     setActiveList(Array.isArray(alRes.value.data) ? alRes.value.data : []);
-      if (alListRes.status === "fulfilled") setAlarmList(Array.isArray(alListRes.value.data) ? alListRes.value.data : []);
-      if (trendRes.status === "fulfilled")  setAlarmTrend(Array.isArray(trendRes.value.data) ? trendRes.value.data : []);
-      if (typeRes.status === "fulfilled")   setAlarmByType(Array.isArray(typeRes.value.data) ? typeRes.value.data : []);
-      if (circleRes.status === "fulfilled") setAlarmByCircle(Array.isArray(circleRes.value.data) ? circleRes.value.data : []);
-      if (acRes.status === "fulfilled")     setActiveByCircle(Array.isArray(acRes.value.data) ? acRes.value.data : []);
-      if (dsRes.status === "fulfilled")     setDownSites(Array.isArray(dsRes.value.data) ? dsRes.value.data : []);
+      const res = await axios.get(`${BASE_URL}/SITE-DASHBOARD-ALL?date=${selectedDate}`);
+      const d = res.data;
+      setStats(d.stats || null);
+      setActiveList(Array.isArray(d.active_list) ? d.active_list : []);
+      setAlarmList(Array.isArray(d.alarm_list) ? d.alarm_list : []);
+      setAlarmTrend(Array.isArray(d.alarm_trend) ? d.alarm_trend : []);
+      setAlarmByType(Array.isArray(d.alarm_by_type) ? d.alarm_by_type : []);
+      setAlarmByCircle(Array.isArray(d.alarm_by_circle) ? d.alarm_by_circle : []);
+      setActiveByCircle(Array.isArray(d.active_by_circle) ? d.active_by_circle : []);
+      setDownSites(Array.isArray(d.down_list) ? d.down_list : []);
       setLastUpdated(new Date());
     } catch (err) {
       console.error("Site dashboard fetch error:", err);
@@ -303,13 +294,36 @@ const SiteDashboard = () => {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  /* — build IMEI → circle lookup from alarm data (alarms have real state_name circles) — */
+  const imeiCircleMap = useMemo(() => {
+    const map = {};
+    alarmList.forEach(a => {
+      if (a.imei && a.imei !== "—" && a.circle && a.circle !== "—") {
+        map[String(a.imei)] = a.circle;
+      }
+    });
+    return map;
+  }, [alarmList]);
+
+  /* — enrich activeList with circle from alarm lookup when site API has no circle — */
+  const enrichedActiveList = useMemo(() => {
+    return activeList.map(s => {
+      const hasCircle = s.circle && s.circle !== "—";
+      const lookedUp  = imeiCircleMap[String(s.imei_no || "")] || null;
+      return { ...s, circle: hasCircle ? s.circle : (lookedUp || s.circle) };
+    });
+  }, [activeList, imeiCircleMap]);
+
   /* — derived filter options — */
-  const activeCircleOpts = [...new Set(activeList.map((r) => r.circle).filter(Boolean))].sort();
+  const activeCircleOpts = useMemo(() =>
+    [...new Set(enrichedActiveList.map(r => r.circle).filter(v => v && v !== "—"))].sort(),
+    [enrichedActiveList]
+  );
   const alarmTypeOpts    = [...new Set(alarmList.map((r) => r.alarm_type).filter(Boolean))].sort();
-  const alarmCircleOpts  = [...new Set(alarmList.map((r) => r.circle).filter(Boolean))].sort();
+  const alarmCircleOpts  = [...new Set(alarmList.map((r) => r.circle).filter(v => v && v !== "—"))].sort();
 
   /* — filtered rows — */
-  const filteredActive = activeList.filter((r) => {
+  const filteredActive = enrichedActiveList.filter((r) => {
     const q = activeSearch.toLowerCase();
     const matchQ = !q ||
       (r.site_name || "").toLowerCase().includes(q) ||

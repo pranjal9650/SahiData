@@ -28,7 +28,27 @@ def update_site_monitoring_job():
 
 
 # =====================================================
-# JOB 2 — DAILY EMAIL REPORT (every day at 18:00)
+# JOB 2 — CACHE REFRESH (every 10 min)
+# =====================================================
+
+def update_cache_job():
+    print("[Scheduler] Running Cache Refresh Job...")
+    db = SessionLocal()
+    try:
+        from main import cache_sites_to_db, cache_alarms_to_db
+        from datetime import datetime as _dt
+        today = _dt.now().strftime("%Y-%m-%d")
+        n_sites  = cache_sites_to_db(db)
+        n_alarms = cache_alarms_to_db(db, [today])
+        print(f"[Scheduler] Cache refreshed — {n_sites} sites, {n_alarms} alarms for {today}")
+    except Exception as e:
+        print("[Scheduler] Cache Refresh Error:", str(e))
+    finally:
+        db.close()
+
+
+# =====================================================
+# JOB 3 — DAILY EMAIL REPORT (every day at 18:00)
 # =====================================================
 
 def run_daily_report_job():
@@ -53,8 +73,16 @@ def start_scheduler():
         replace_existing=True
     )
 
+    _scheduler.add_job(
+        update_cache_job,
+        trigger="interval",
+        minutes=10,
+        id="cache_refresh_job",
+        replace_existing=True
+    )
+
     _scheduler.start()
-    print("[Scheduler] Started — site monitoring every 10 min (email report disabled)")
+    print("[Scheduler] Started — site monitoring + cache refresh every 10 min")
 
 
 def stop_scheduler():

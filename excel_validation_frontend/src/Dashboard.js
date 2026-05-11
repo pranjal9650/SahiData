@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import SiteDashboard from "./SiteDashboard";
 
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = "http://127.0.0.1:8001";
 
 const T = {
   red:      "#CC0000",
@@ -120,15 +120,11 @@ function CustomTooltip({ active, payload, label }) {
 }
 
 /* ─── Per-user row — expandable ──────────────────────────────── */
-function UserRow({ user, index, attendance, onViewRecords }) {
+function UserRow({ user, index, onViewRecords }) {
   const totalValid   = Object.values(user.forms || {}).reduce((s, f) => s + (f.valid   || 0), 0);
   const totalInvalid = Object.values(user.forms || {}).reduce((s, f) => s + (f.invalid || 0), 0);
   const totalRows    = totalValid + totalInvalid;
   const accuracy     = totalRows ? Math.round((totalValid / totalRows) * 100) : 0;
-
-  const attLower  = (attendance || "").toLowerCase().trim();
-  const isPresent = ["p", "present", "yes"].includes(attLower);
-  const isAbsent  = ["a", "absent",  "no" ].includes(attLower);
 
   const formEntries = Object.entries(user.forms || {}).filter(([, d]) => (d?.valid || 0) + (d?.invalid || 0) > 0);
 
@@ -151,26 +147,26 @@ function UserRow({ user, index, attendance, onViewRecords }) {
       </td>
 
       {/* Total rows */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center" }}>
+      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center", verticalAlign: "middle" }}>
         <span style={{ fontSize: 13.5, fontWeight: 600, color: T.text }}>{totalRows.toLocaleString()}</span>
       </td>
 
       {/* Valid */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center" }}>
+      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center", verticalAlign: "middle" }}>
         <span style={{ color: T.green, fontWeight: 600, background: T.greenBg, padding: "3px 10px", borderRadius: 99, fontSize: 12.5 }}>
           {totalValid.toLocaleString()}
         </span>
       </td>
 
       {/* Invalid */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center" }}>
+      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center", verticalAlign: "middle" }}>
         <span style={{ color: T.red, fontWeight: 600, background: T.redBg, padding: "3px 10px", borderRadius: 99, fontSize: 12.5 }}>
           {totalInvalid.toLocaleString()}
         </span>
       </td>
 
       {/* Accuracy */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}` }}>
+      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ flex: 1, height: 6, borderRadius: 99, background: T.border, overflow: "hidden", maxWidth: 90 }}>
             <div style={{
@@ -185,81 +181,83 @@ function UserRow({ user, index, attendance, onViewRecords }) {
         </div>
       </td>
 
-      {/* Form Names — inline valid/invalid per form, each badge clickable */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}` }}>
+      {/* Form Breakdown */}
+      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, verticalAlign: "middle" }}>
         {formEntries.length === 0
           ? <span style={{ fontSize: 12, color: T.muted }}>—</span>
-          : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {formEntries.map(([formName, d]) => {
-                const v   = d?.valid   || 0;
-                const inv = d?.invalid || 0;
-                return (
-                  <div key={formName} style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: T.text, minWidth: 90 }}>{formName}</span>
-                    <span
-                      onClick={() => onViewRecords(user.username, formName, "valid", v)}
-                      style={{
-                        fontSize: 11, color: T.green, fontWeight: 700,
-                        background: T.greenBg, padding: "2px 8px", borderRadius: 99,
-                        cursor: v > 0 ? "pointer" : "default",
-                        opacity: v > 0 ? 1 : 0.5,
-                        border: "1px solid transparent",
-                        transition: "border-color 0.15s",
-                        userSelect: "none",
-                      }}
-                      onMouseEnter={(e) => { if (v > 0) e.currentTarget.style.borderColor = T.green; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "transparent"; }}
-                      title={v > 0 ? `Click to see ${v} valid records` : "No valid records"}
-                    >
-                      {v} valid
-                    </span>
-                    <span
-                      onClick={() => onViewRecords(user.username, formName, "invalid", inv)}
-                      style={{
-                        fontSize: 11, color: T.red, fontWeight: 700,
-                        background: T.redBg, padding: "2px 8px", borderRadius: 99,
-                        cursor: inv > 0 ? "pointer" : "default",
-                        opacity: inv > 0 ? 1 : 0.5,
-                        border: "1px solid transparent",
-                        transition: "border-color 0.15s",
-                        userSelect: "none",
-                      }}
-                      onMouseEnter={(e) => { if (inv > 0) e.currentTarget.style.borderColor = T.red; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "transparent"; }}
-                      title={inv > 0 ? `Click to see ${inv} invalid records` : "No invalid records"}
-                    >
-                      {inv} invalid
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+          : <table style={{ borderCollapse: "collapse", tableLayout: "auto" }}>
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <th style={{ padding: "0 20px 5px 0", fontSize: 10, fontWeight: 700, color: T.muted, textTransform: "uppercase", letterSpacing: "0.5px", textAlign: "left", whiteSpace: "nowrap" }}>Form</th>
+                  <th style={{ padding: "0 8px 5px", fontSize: 10, fontWeight: 700, color: T.green, textTransform: "uppercase", letterSpacing: "0.5px", textAlign: "center", width: 64, whiteSpace: "nowrap" }}>Valid</th>
+                  <th style={{ padding: "0 0 5px 8px", fontSize: 10, fontWeight: 700, color: T.red, textTransform: "uppercase", letterSpacing: "0.5px", textAlign: "center", width: 72, whiteSpace: "nowrap" }}>Invalid</th>
+                </tr>
+              </thead>
+              <tbody>
+                {formEntries.map(([formName, d]) => {
+                  const v   = d?.valid   || 0;
+                  const inv = d?.invalid || 0;
+                  return (
+                    <tr key={formName}>
+                      <td style={{ padding: "4px 20px 4px 0", fontSize: 12.5, fontWeight: 600, color: T.text, whiteSpace: "nowrap" }}>
+                        {formName}
+                      </td>
+                      <td style={{ padding: "4px 8px", textAlign: "center" }}>
+                        <span
+                          onClick={() => onViewRecords(user.username, formName, "valid", v)}
+                          style={{
+                            display: "inline-block",
+                            fontSize: 11.5, color: T.green, fontWeight: 700,
+                            background: T.greenBg, padding: "2px 10px", borderRadius: 99,
+                            cursor: v > 0 ? "pointer" : "default",
+                            opacity: v > 0 ? 1 : 0.45,
+                            border: "1px solid transparent",
+                            transition: "border-color 0.15s",
+                            userSelect: "none", minWidth: 32,
+                          }}
+                          onMouseEnter={(e) => { if (v > 0) e.currentTarget.style.borderColor = T.green; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "transparent"; }}
+                          title={v > 0 ? `Click to see ${v} valid records` : "No valid records"}
+                        >
+                          {v}
+                        </span>
+                      </td>
+                      <td style={{ padding: "4px 0 4px 8px", textAlign: "center" }}>
+                        <span
+                          onClick={() => onViewRecords(user.username, formName, "invalid", inv)}
+                          style={{
+                            display: "inline-block",
+                            fontSize: 11.5, color: T.red, fontWeight: 700,
+                            background: T.redBg, padding: "2px 10px", borderRadius: 99,
+                            cursor: inv > 0 ? "pointer" : "default",
+                            opacity: inv > 0 ? 1 : 0.45,
+                            border: "1px solid transparent",
+                            transition: "border-color 0.15s",
+                            userSelect: "none", minWidth: 32,
+                          }}
+                          onMouseEnter={(e) => { if (inv > 0) e.currentTarget.style.borderColor = T.red; }}
+                          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "transparent"; }}
+                          title={inv > 0 ? `Click to see ${inv} invalid records` : "No invalid records"}
+                        >
+                          {inv}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
         }
       </td>
-
-      {/* Attendance */}
-      <td style={{ padding: "12px 16px", borderBottom: `1px solid ${T.border}`, textAlign: "center" }}>
-        {isPresent
-          ? <span style={{ color: T.green, fontWeight: 600, background: T.greenBg, padding: "3px 12px", borderRadius: 99, fontSize: 12.5 }}>Present</span>
-          : isAbsent
-          ? <span style={{ color: T.red,   fontWeight: 600, background: T.redBg,   padding: "3px 12px", borderRadius: 99, fontSize: 12.5 }}>Absent</span>
-          : <span style={{ color: T.muted, fontWeight: 500, background: T.surface, padding: "3px 12px", borderRadius: 99, fontSize: 12.5, border: `1px solid ${T.border}` }}>N / A</span>
-        }
-      </td>
-
     </tr>
   );
 }
-
-/* ─── Main component ─────────────────────────────────────────── */
 const Dashboard = () => {
-  const [dashView, setDashView]   = useState("forms");
+const [dashView, setDashView]   = useState("forms");
   const [stats, setStats]         = useState(null);
   const [chartData, setChartData] = useState([]);
   const [tableData, setTableData] = useState([]);
   const [userData, setUserData]   = useState([]);
-  const [allFormNames, setAllFormNames] = useState([]);
-  const [attendanceMap, setAttendanceMap] = useState({});
   const [userSearch,    setUserSearch]    = useState("");
 
   const [recordsModal,   setRecordsModal]   = useState(false);
@@ -339,14 +337,12 @@ const Dashboard = () => {
     else setLoading(true);
     try {
       const bust = Date.now();
-      const [dashRes, analyticsRes, attRes] = await Promise.all([
+      const [dashRes, analyticsRes] = await Promise.all([
         axios.get(`${BASE_URL}/DASHBOARD-DATA`,    { params: { _t: bust } }),
         axios.get(`${BASE_URL}/ANALYTICS`,         { params: { _t: bust } }),
-        axios.get(`${BASE_URL}/ATTENDANCE-STATUS`, { params: { _t: bust } }).catch(() => ({ data: {} })),
       ]);
       setStats(dashRes.data);
       processAnalytics(analyticsRes.data);
-      setAttendanceMap(attRes.data || {});
       setLastUpdated(new Date());
     } catch (err) {
       console.error("Dashboard fetch error:", err);
@@ -374,10 +370,8 @@ const Dashboard = () => {
   const processAnalytics = (data) => {
     if (!Array.isArray(data)) return;
     const formMap      = {};
-    const formNamesSet = new Set();
     data.forEach((user) => {
       Object.keys(user.forms || {}).forEach((name) => {
-        formNamesSet.add(name);
         const d       = user.forms[name];
         const valid   = Number(d?.valid   || 0);
         const invalid = Number(d?.invalid || 0);
@@ -397,7 +391,6 @@ const Dashboard = () => {
     setChartData(built);
     setTableData(built);
     setUserData(data);
-    setAllFormNames([...formNamesSet]);
   };
 
   const {
@@ -1566,19 +1559,34 @@ const Dashboard = () => {
           </div>
 
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: "22%" }} />
+                <col style={{ width: "11%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "15%" }} />
+                <col style={{ width: "32%" }} />
+              </colgroup>
               <thead>
                 <tr style={{ background: T.pageBg }}>
-                  {["User", "Total Rows", "Valid", "Invalid", "Accuracy", "Form Names", "Attendance"].map((h, hi) => (
-                    <th key={h} style={{
+                  {[
+                    { label: "User",           align: "left"   },
+                    { label: "Total Rows",     align: "center" },
+                    { label: "Valid",          align: "center" },
+                    { label: "Invalid",        align: "center" },
+                    { label: "Accuracy",       align: "left"   },
+                    { label: "Form Breakdown", align: "left"   },
+                  ].map(({ label, align }) => (
+                    <th key={label} style={{
                       padding: "10px 16px",
-                      textAlign: hi === 0 || hi === 5 ? "left" : "center",
+                      textAlign: align,
                       fontSize: 11, fontWeight: 600,
                       textTransform: "uppercase", letterSpacing: "0.6px",
                       color: T.muted, whiteSpace: "nowrap",
                       borderBottom: `1px solid ${T.border}`,
                     }}>
-                      {h}
+                      {label}
                     </th>
                   ))}
                 </tr>
@@ -1587,13 +1595,12 @@ const Dashboard = () => {
                 {userData
                   .filter((u) => !userSearch || (u.username || "").toLowerCase().includes(userSearch.toLowerCase()))
                   .map((user, i) => (
-                  <UserRow
-                    key={user.username || i}
-                    user={user}
-                    index={i}
-                    attendance={attendanceMap[(user.username || "").toLowerCase()] || ""}
-                    onViewRecords={handleViewUserRecords}
-                  />
+<UserRow
+                      key={user.username || i}
+                      user={user}
+                      index={i}
+                      onViewRecords={handleViewUserRecords}
+                    />
                 ))}
               </tbody>
             </table>

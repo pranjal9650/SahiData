@@ -56,6 +56,22 @@ from scheduler import start_scheduler
 @app.on_event("startup")
 def startup_event():
     start_scheduler()
+    import threading
+    def _populate_cache():
+        db = SessionLocal()
+        try:
+            today = datetime.now()
+            dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+            print("[Startup] Populating site cache from external API...")
+            cache_sites_to_db(db)
+            print("[Startup] Populating alarm cache for last 7 days...")
+            cache_alarms_to_db(db, dates)
+            print("[Startup] Cache population complete")
+        except Exception as e:
+            print(f"[Startup] Cache error: {e}")
+        finally:
+            db.close()
+    threading.Thread(target=_populate_cache, daemon=True).start()
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -76,6 +92,7 @@ REPORT_FILE_MAP = {
     "forms_filled": "forms_filled.xlsx",
     "alarm":        "alarm.csv",
     "active_sites": "active_sites.xlsx",
+    "site_master":  "site_master.xlsx",
 }
 
 # =====================================================
@@ -648,8 +665,154 @@ def fetch_alarm_data(start_date=None, end_date=None, imei=None):
         return []
 
 
+# =====================================================
+# DB CACHE — row converters
+# =====================================================
+
+def _site_row_to_api(row):
+    return {
+        "site_code":          row.site_id,
+        "globel_id":          row.site_id,
+        "site_name":          row.site_name,
+        "state":              row.circle,
+        "state_name":         row.circle,
+        "circle":             row.circle,
+        "h1":                 row.h1,
+        "district":           row.h1,
+        "cluster":            row.h1,
+        "h2":                 row.h2,
+        "gsm_imei_no":        row.imei_no,
+        "battery_v":          row.battery_v,
+        "battery":            row.battery_v,
+        "signal_dbm":         row.signal_dbm,
+        "signal":             row.signal_dbm,
+        "last_communication": row.last_communication,
+        "last_sync":          row.last_communication,
+        "aging":              row.aging,
+    }
+
+
+def _alarm_row_to_api(row):
+    return {
+        "globel_id":     row.global_id,
+        "site_name":     row.site_name,
+        "state_name":    row.circle,
+        "district":      row.district,
+        "cluster":       row.cluster,
+        "alarm_name":    row.alarm_name,
+        "start_time":    row.start_time,
+        "end_time":      row.end_time if row.end_time else None,
+        "imei":          row.imei,
+        "volt":          row.volt,
+        "district_name": row.district,
+    }
+
+
+def get_sites(db: Session):
+    """Return sites from DB cache if populated, else fall back to live API."""
+    rows = db.query(models.CachedSite).all()
+    if rows:
+        return [_site_row_to_api(r) for r in rows]
+    return fetch_all_sites()
+
+
+def get_alarms(db: Session, start_date: str, end_date: str, imei: str = None):
+    """Return alarms from DB cache if all requested dates are present, else fall back to live API."""
+    try:
+        start_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_obj   = datetime.strptime(end_date,   "%Y-%m-%d").date()
+        needed    = set()
+        cur = start_obj
+        while cur <= end_obj:
+            needed.add(cur.strftime("%Y-%m-%d"))
+            cur += timedelta(days=1)
+
+        # Check coverage using the full dataset (no IMEI filter) so that dates
+        # with zero alarms for a specific IMEI still count as "cached"
+        cached_dates = {
+            r[0] for r in db.query(models.CachedAlarm.alarm_date)
+                             .filter(models.CachedAlarm.alarm_date >= start_date,
+                                     models.CachedAlarm.alarm_date <= end_date)
+                             .distinct().all()
+        }
+
+        if needed.issubset(cached_dates):
+            q = db.query(models.CachedAlarm).filter(
+                models.CachedAlarm.alarm_date >= start_date,
+                models.CachedAlarm.alarm_date <= end_date,
+            )
+            if imei:
+                q = q.filter(models.CachedAlarm.imei == imei)
+            return [_alarm_row_to_api(r) for r in q.all()]
+    except Exception as e:
+        print(f"Cache read error: {e}")
+    return fetch_alarm_data(start_date, end_date, imei)
+
+
+# =====================================================
+# DB CACHE — populate / refresh
+# =====================================================
+
+def cache_sites_to_db(db: Session):
+    """Fetch from external API and replace all rows in cached_sites."""
+    sites = fetch_all_sites()
+    if not sites:
+        return 0
+    now = datetime.utcnow()
+    db.query(models.CachedSite).delete()
+    for s in sites:
+        db.add(models.CachedSite(
+            site_id            = str(s.get("site_code") or s.get("globel_id") or ""),
+            site_name          = str(s.get("site_name") or ""),
+            circle             = str(s.get("state") or s.get("state_name") or s.get("circle") or ""),
+            h1                 = str(s.get("h1") or s.get("district") or s.get("cluster") or ""),
+            h2                 = str(s.get("h2") or ""),
+            imei_no            = str(s.get("gsm_imei_no") or ""),
+            battery_v          = str(s.get("battery_v") or s.get("battery") or ""),
+            signal_dbm         = str(s.get("signal_dbm") or s.get("signal") or ""),
+            last_communication = str(s.get("last_communication") or s.get("last_sync") or ""),
+            aging              = str(s.get("aging") or ""),
+            fetched_at         = now,
+        ))
+    db.commit()
+    print(f"✅ Cached {len(sites)} sites to DB")
+    return len(sites)
+
+
+def cache_alarms_to_db(db: Session, dates: list):
+    """Fetch alarms for each date and refresh those date-partitions in cached_alarms."""
+    total = 0
+    now   = datetime.utcnow()
+    for d in dates:
+        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        db.query(models.CachedAlarm).filter(models.CachedAlarm.alarm_date == d).delete()
+        for a in alarms:
+            st        = str(a.get("start_time") or "")
+            alarm_date = st[:10] if len(st) >= 10 else d
+            end_raw   = a.get("end_time")
+            db.add(models.CachedAlarm(
+                global_id  = str(a.get("globel_id") or ""),
+                site_name  = str(a.get("site_name") or ""),
+                circle     = str(a.get("state_name") or ""),
+                district   = str(a.get("district") or a.get("district_name") or ""),
+                cluster    = str(a.get("cluster") or ""),
+                alarm_name = str(a.get("alarm_name") or ""),
+                start_time = st,
+                end_time   = str(end_raw) if end_raw and str(end_raw).strip() not in ("", "None", "null") else "",
+                imei       = str(a.get("imei") or ""),
+                volt       = str(a.get("volt") or ""),
+                is_active  = 1 if is_active_alarm(a) else 0,
+                alarm_date = alarm_date,
+                fetched_at = now,
+            ))
+        db.commit()
+        total += len(alarms)
+        print(f"✅ Cached {len(alarms)} alarms for {d}")
+    return total
+
+
 # Alarm types that count as a site being "down"
-CRITICAL_ALARM_KEYWORDS = ["BTLV", "L LVD CUT", "MNSF"]
+CRITICAL_ALARM_KEYWORDS = ["BTLV", "L LVD CUT", "MNSF", "FIBRE CUT", "FIBER CUT", "FIBRE", "FIBER"]
 
 def is_critical_alarm(alarm):
     name = (alarm.get("alarm_name") or "").upper().strip()
@@ -751,8 +914,11 @@ def site_monitoring_api(
     end_date:   str = None,
     db: Session = Depends(get_db)
 ):
-    sites_raw  = fetch_all_sites()
-    alarms_raw = fetch_alarm_data(start_date, end_date)
+    today = datetime.now().strftime("%Y-%m-%d")
+    sd = start_date or today
+    ed = end_date or today
+    sites_raw  = get_sites(db)
+    alarms_raw = get_alarms(db, sd, ed)
 
     alarm_map = {}
     for alarm in alarms_raw:
@@ -814,8 +980,9 @@ def site_monitoring_api(
 
 
 @app.get("/SITE-ALARMS")
-def site_alarms_api(start_date: str = None, end_date: str = None):
-    alarms = fetch_alarm_data(start_date, end_date)
+def site_alarms_api(start_date: str = None, end_date: str = None, db: Session = Depends(get_db)):
+    today  = datetime.now().strftime("%Y-%m-%d")
+    alarms = get_alarms(db, start_date or today, end_date or today)
 
     result = []
     for alarm in alarms:
@@ -856,10 +1023,10 @@ def _alarm_duration_min(alarm):
 
 
 @app.get("/SITE-DETAIL")
-def site_detail(imei: str, days: int = 7):
+def site_detail(imei: str, days: int = 7, db: Session = Depends(get_db)):
     today     = datetime.now().strftime("%Y-%m-%d")
     start_day = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    alarms    = fetch_alarm_data(start_date=start_day, end_date=today, imei=imei)
+    alarms    = get_alarms(db, start_day, today, imei=imei)
 
     if not alarms:
         return {
@@ -2056,12 +2223,12 @@ def parse_duration_to_minutes(duration_str: str) -> float:
 
 
 @app.get("/SITE-DASHBOARD-STATS")
-def site_dashboard_stats(date: str = None):
+def site_dashboard_stats(date: str = None, db: Session = Depends(get_db)):
     try:
         d = date or datetime.now().strftime("%Y-%m-%d")
 
-        sites  = fetch_all_sites()
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        sites  = get_sites(db)
+        alarms = get_alarms(db, d, d)
 
         total_active_sites = len(sites)
         total_alarm_events = len(alarms)
@@ -2110,11 +2277,11 @@ def site_absent_stats():
 
 
 @app.get("/SITE-DOWN-LIST")
-def site_down_list(date: str = None):
-    """Returns list of sites currently down — based on critical alarms from live API."""
+def site_down_list(date: str = None, db: Session = Depends(get_db)):
+    """Returns list of sites currently down — based on critical alarms."""
     try:
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        alarms = get_alarms(db, d, d)
 
         seen = {}
         for a in alarms:
@@ -2137,9 +2304,9 @@ def site_down_list(date: str = None):
 
 
 @app.get("/SITE-ACTIVE-LIST")
-def site_active_list():
+def site_active_list(db: Session = Depends(get_db)):
     try:
-        sites = fetch_all_sites()
+        sites = get_sites(db)
         result = []
         for s in sites:
             result.append({
@@ -2162,10 +2329,10 @@ def site_active_list():
 
 
 @app.get("/SITE-ALARM-LIST")
-def site_alarm_list(date: str = None):
+def site_alarm_list(date: str = None, db: Session = Depends(get_db)):
     try:
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        alarms = get_alarms(db, d, d)
 
         result = []
         for a in alarms:
@@ -2197,10 +2364,10 @@ def site_alarm_list(date: str = None):
 
 
 @app.get("/SITE-ALARM-TREND")
-def site_alarm_trend(date: str = None):
+def site_alarm_trend(date: str = None, db: Session = Depends(get_db)):
     try:
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        alarms = get_alarms(db, d, d)
 
         hourly = {h: 0 for h in range(24)}
         for a in alarms:
@@ -2219,10 +2386,10 @@ def site_alarm_trend(date: str = None):
 
 
 @app.get("/SITE-ALARM-BY-TYPE")
-def site_alarm_by_type(date: str = None):
+def site_alarm_by_type(date: str = None, db: Session = Depends(get_db)):
     try:
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        alarms = get_alarms(db, d, d)
 
         type_map = {}
         for a in alarms:
@@ -2240,10 +2407,10 @@ def site_alarm_by_type(date: str = None):
 
 
 @app.get("/SITE-ALARM-BY-CIRCLE")
-def site_alarm_by_circle(date: str = None):
+def site_alarm_by_circle(date: str = None, db: Session = Depends(get_db)):
     try:
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        alarms = get_alarms(db, d, d)
 
         circle_map = {}
         for a in alarms:
@@ -2262,13 +2429,12 @@ def site_alarm_by_circle(date: str = None):
 
 
 @app.get("/SITE-ACTIVE-BY-CIRCLE")
-def site_active_by_circle(date: str = None):
+def site_active_by_circle(date: str = None, db: Session = Depends(get_db)):
     try:
-        sites = fetch_all_sites()
-
         # Build IMEI → circle from selected date's alarm data
         d      = date or datetime.now().strftime("%Y-%m-%d")
-        alarms = fetch_alarm_data(start_date=d, end_date=d)
+        sites  = get_sites(db)
+        alarms = get_alarms(db, d, d)
         imei_to_circle = {}
         for a in alarms:
             imei   = str(a.get("imei", "")).strip()
@@ -2305,7 +2471,7 @@ def site_active_by_circle(date: str = None):
 
 
 def _fetch_days_parallel(dates: list) -> dict:
-    """Fetch alarm data for multiple dates in parallel. Returns {date: [alarms]}."""
+    """Fetch alarm data for multiple dates in parallel (live API). Returns {date: [alarms]}."""
     daily = {}
     with ThreadPoolExecutor(max_workers=4) as ex:
         futures = {ex.submit(fetch_alarm_data, d, d): d for d in dates}
@@ -2319,8 +2485,24 @@ def _fetch_days_parallel(dates: list) -> dict:
     return daily
 
 
+def _fetch_days_cached(db: Session, dates: list) -> dict:
+    """Fetch alarm data for multiple dates, using DB cache where available."""
+    daily    = {}
+    api_dates = []
+    for d in dates:
+        rows = db.query(models.CachedAlarm).filter(models.CachedAlarm.alarm_date == d).all()
+        if rows:
+            daily[d] = [_alarm_row_to_api(r) for r in rows]
+        else:
+            api_dates.append(d)
+    if api_dates:
+        live = _fetch_days_parallel(api_dates)
+        daily.update(live)
+    return daily
+
+
 @app.get("/CIRCLE-REPORT")
-def circle_report(rng: str = Query("today", alias="range")):
+def circle_report(rng: str = Query("today", alias="range"), db: Session = Depends(get_db)):
     today     = datetime.now().date()
     yesterday = today - timedelta(days=1)
 
@@ -2337,8 +2519,8 @@ def circle_report(rng: str = Query("today", alias="range")):
         dates       = [today.strftime("%Y-%m-%d")]
         period_days = 1
 
-    sites      = fetch_all_sites()
-    daily_data = _fetch_days_parallel(dates)
+    sites      = get_sites(db)
+    daily_data = _fetch_days_cached(db, dates)
     all_alarms = [a for v in daily_data.values() for a in v]
 
     def _fmt_alarm_time(dt_str):
@@ -2459,7 +2641,7 @@ def circle_report(rng: str = Query("today", alias="range")):
 
 
 @app.get("/ANALYTICS-DATA")
-def analytics_data_api(rng: str = Query("24h", alias="range")):
+def analytics_data_api(rng: str = Query("24h", alias="range"), db: Session = Depends(get_db)):
     today     = datetime.now().date()
     yesterday = today - timedelta(days=1)
 
@@ -2476,9 +2658,9 @@ def analytics_data_api(rng: str = Query("24h", alias="range")):
     # Always include yesterday for the 24-hour alarm timeline
     all_dates     = sorted(set(primary_dates + [yesterday.strftime("%Y-%m-%d")]))
 
-    sites      = fetch_all_sites()
+    sites      = get_sites(db)
     total_sites_count = len(sites)
-    daily_data = _fetch_days_parallel(all_dates)
+    daily_data = _fetch_days_cached(db, all_dates)
 
     primary_alarms = [a for d in primary_dates for a in daily_data.get(d, [])]
     all_alarms_all = [a for v in daily_data.values() for a in v]
@@ -2595,6 +2777,263 @@ def analytics_data_api(rng: str = Query("24h", alias="range")):
     }
 
 
+# =====================================================
+# CONSOLIDATED ENDPOINTS  (single fetch for each page)
+# =====================================================
+
+@app.get("/SITE-DASHBOARD-ALL")
+def site_dashboard_all(date: str = None, db: Session = Depends(get_db)):
+    """Returns all site-dashboard data in one call — sites + alarms fetched once."""
+    try:
+        d      = date or datetime.now().strftime("%Y-%m-%d")
+        sites  = get_sites(db)
+        alarms = get_alarms(db, d, d)
+
+        # ── Stats ──
+        durations = [dur for a in alarms if (dur := _alarm_duration_min(a)) is not None]
+        stats = {
+            "total_active_sites":         len(sites),
+            "total_alarm_events":         len(alarms),
+            "unique_alarm_sites":         len({str(a.get("imei","")).strip() for a in alarms if a.get("imei")}),
+            "circles_affected":           len({str(a.get("state_name","")).strip() for a in alarms if a.get("state_name")}),
+            "avg_alarm_duration_minutes": round(sum(durations)/len(durations), 2) if durations else 0,
+        }
+
+        # ── Active site list ──
+        active_list = [{
+            "site_id":            s.get("site_code") or s.get("globel_id") or "—",
+            "site_name":          s.get("site_name") or "—",
+            "circle":             s.get("state") or s.get("state_name") or s.get("circle") or "—",
+            "h1":                 s.get("h1") or s.get("district") or s.get("cluster") or "—",
+            "h2":                 s.get("h2") or "—",
+            "imei_no":            s.get("gsm_imei_no") or "—",
+            "battery_v":          s.get("battery_v") or s.get("battery") or "—",
+            "signal_dbm":         s.get("signal_dbm") or s.get("signal") or "—",
+            "last_communication": s.get("last_communication") or s.get("last_sync") or "—",
+            "aging":              s.get("aging") or "—",
+        } for s in sites]
+
+        # ── Alarm list ──
+        alarm_list = []
+        for a in alarms:
+            dur_min = _alarm_duration_min(a)
+            dur_str = f"{int(dur_min)//60:02d}:{int(dur_min)%60:02d}:00" if dur_min is not None else "—"
+            alarm_list.append({
+                "global_id":        a.get("globel_id") or "—",
+                "site_name":        a.get("site_name") or "—",
+                "circle":           a.get("state_name") or "—",
+                "district":         a.get("district") or "—",
+                "cluster":          a.get("cluster") or "—",
+                "alarm_type":       a.get("alarm_name") or "—",
+                "alarm_start_time": a.get("start_time") or "—",
+                "alarm_end_time":   a.get("end_time") or "—",
+                "duration":         dur_str,
+                "battery_start_v":  "—",
+                "battery_end_v":    a.get("volt") or "—",
+                "imei":             a.get("imei") or "—",
+            })
+
+        # ── Alarm trend (hourly) ──
+        hourly = {h: 0 for h in range(24)}
+        for a in alarms:
+            st = a.get("start_time") or ""
+            if len(st) >= 13:
+                try:    hourly[int(st[11:13])] += 1
+                except: pass
+        alarm_trend = [{"hour": f"{h:02d}:00", "count": hourly[h]} for h in range(24)]
+
+        # ── Alarm by type ──
+        type_map = {}
+        for a in alarms:
+            n = (a.get("alarm_name") or "Unknown").strip()
+            type_map[n] = type_map.get(n, 0) + 1
+        alarm_by_type = sorted([{"alarm_type": k, "count": v} for k, v in type_map.items()], key=lambda x: x["count"], reverse=True)
+
+        # ── Alarm by circle ──
+        cmap = {}
+        for a in alarms:
+            c = (a.get("state_name") or "").strip()
+            if c:
+                cmap[c] = cmap.get(c, 0) + 1
+        alarm_by_circle = sorted([{"circle": k, "count": v} for k, v in cmap.items()], key=lambda x: x["count"], reverse=True)
+
+        # ── Active by circle ──
+        active_alarms_now = [a for a in alarms if is_active_alarm(a)]
+        imei_to_circle = {}
+        for a in alarms:
+            imei = str(a.get("imei","")).strip()
+            circ = (a.get("state_name") or "").strip()
+            if imei and circ and imei not in imei_to_circle:
+                imei_to_circle[imei] = circ
+        # Only sites with an active MNSF or BTLV alarm count as down
+        down_imeis = {str(a.get("imei","")).strip() for a in active_alarms_now if is_critical_alarm(a)}
+        abc_map = {}
+        for s in sites:
+            imei = str(s.get("gsm_imei_no","")).strip()
+            if imei in down_imeis:
+                continue
+            circ = (imei_to_circle.get(imei) or s.get("state") or s.get("state_name") or s.get("circle") or "Unknown").strip() or "Unknown"
+            abc_map[circ] = abc_map.get(circ, 0) + 1
+        active_by_circle = sorted([{"circle": k, "count": v} for k, v in abc_map.items()], key=lambda x: x["count"], reverse=True)
+
+        # ── Down list — only currently active critical alarms ──
+        down_seen = {}
+        for a in active_alarms_now:
+            if not is_critical_alarm(a):
+                continue
+            imei = str(a.get("imei","")).strip()
+            if imei and imei not in down_seen:
+                down_seen[imei] = {
+                    "site_name": a.get("site_name"),
+                    "global_id": a.get("globel_id"),
+                    "circle":    a.get("state_name"),
+                    "alarm":     a.get("alarm_name"),
+                    "since":     a.get("start_time"),
+                }
+
+        return {
+            "stats":            stats,
+            "active_list":      active_list,
+            "alarm_list":       alarm_list,
+            "alarm_trend":      alarm_trend,
+            "alarm_by_type":    alarm_by_type,
+            "alarm_by_circle":  alarm_by_circle,
+            "active_by_circle": active_by_circle,
+            "down_list":        list(down_seen.values()),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+@app.get("/SITE-MONITORING-ALL")
+def site_monitoring_all(date: str = None, db: Session = Depends(get_db)):
+    """Returns all site-monitoring page data in one call — sites + alarms fetched once."""
+    try:
+        today  = date or datetime.now().strftime("%Y-%m-%d")
+        sites  = get_sites(db)
+        alarms = get_alarms(db, today, today)
+
+        # ── Up/down classification ──
+        alarm_map = {}
+        for a in alarms:
+            alarm_map.setdefault(str(a.get("imei","")).strip(), []).append(a)
+
+        up_sites, down_sites = [], []
+        for site in sites:
+            imei     = str(site.get("gsm_imei_no","")).strip()
+            critical = [a for a in alarm_map.get(imei, []) if is_critical_alarm(a)]
+            if critical:
+                latest = sorted(critical, key=lambda x: x.get("start_time",""), reverse=True)[0]
+                down_sites.append({"site_name": site.get("site_name"), "global_id": site.get("globel_id"),
+                                   "imei": imei, "status": "DOWN",
+                                   "alarm": latest.get("alarm_name"), "since": latest.get("start_time"),
+                                   "end_time": latest.get("end_time")})
+            else:
+                up_sites.append({"site_name": site.get("site_name"), "global_id": site.get("globel_id"),
+                                  "imei": imei, "status": "UP", "since": "Running"})
+
+        total = len(sites)
+        def _has(a, *kw):
+            n = (a.get("alarm_name") or "").upper()
+            return any(k in n for k in kw)
+
+        active_alarms = [a for a in alarms if is_active_alarm(a)]
+
+        summary = {
+            "total_sites":  total,
+            "up_sites":     len(up_sites),
+            # Sites Down = unique sites with an active MNSF, BTLV, or Fibre Cut alarm right now
+            "down_sites":   len({str(a.get("imei","")).strip() for a in active_alarms if _has(a,"MNSF","BTLV","L LVD CUT","FIBRE CUT","FIBER CUT","FIBRE","FIBER")}),
+            "total_alarms": len(alarms),
+            # Mains Failed = unique sites with an active MNSF alarm right now
+            "mains_failed": len({str(a.get("imei","")).strip() for a in active_alarms if _has(a,"MNSF","MAINS","MAIN FAIL")}),
+            # Battery Low = unique sites with an active BTLV alarm right now
+            "battery_low":  len({str(a.get("imei","")).strip() for a in active_alarms if _has(a,"BTLV","LVD")}),
+            "healthy_pct":  round(len(up_sites)/total*100) if total else 0,
+        }
+
+        # ── Alarms feed (SITE-ALARMS format) ──
+        alarms_out = []
+        for a in alarms:
+            volt = a.get("volt")
+            alarms_out.append({
+                "imei":       str(a.get("imei","")).strip(),
+                "site_name":  a.get("site_name"),
+                "global_id":  a.get("globel_id"),
+                "alarm_name": a.get("alarm_name"),
+                "start_time": a.get("start_time"),
+                "end_time":   a.get("end_time"),
+                "state_name": a.get("state_name"),
+                "district":   a.get("district_name") or a.get("district"),
+                "volt":       volt if volt else None,
+                "is_active":  is_active_alarm(a),
+            })
+        alarms_out.sort(key=lambda x: x["start_time"] or "", reverse=True)
+        alarms_out.sort(key=lambda x: not x["is_active"])
+
+        # ── Site list (SITE-ACTIVE-LIST format) ──
+        site_list = [{
+            "site_id":            s.get("site_code") or s.get("globel_id") or "—",
+            "site_name":          s.get("site_name") or "—",
+            "circle":             s.get("state") or s.get("state_name") or s.get("circle") or "—",
+            "h1":                 s.get("h1") or s.get("district") or s.get("cluster") or "—",
+            "h2":                 s.get("h2") or "—",
+            "imei_no":            s.get("gsm_imei_no") or "—",
+            "battery_v":          s.get("battery_v") or s.get("battery") or "—",
+            "signal_dbm":         s.get("signal_dbm") or s.get("signal") or "—",
+            "last_communication": s.get("last_communication") or s.get("last_sync") or "—",
+            "aging":              s.get("aging") or "—",
+        } for s in sites]
+
+        return {"summary": summary, "alarms": alarms_out, "site_list": site_list}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# =====================================================
+# CACHE MANAGEMENT ENDPOINTS
+# =====================================================
+
+@app.post("/REFRESH-CACHE")
+def refresh_cache(db: Session = Depends(get_db)):
+    """Manually refresh the sites and today's alarms cache."""
+    import threading
+    def _do_refresh():
+        ddb = SessionLocal()
+        try:
+            today = datetime.now().strftime("%Y-%m-%d")
+            n_sites  = cache_sites_to_db(ddb)
+            n_alarms = cache_alarms_to_db(ddb, [today])
+            print(f"[Manual Refresh] {n_sites} sites, {n_alarms} alarms cached")
+        except Exception as e:
+            print(f"[Manual Refresh] Error: {e}")
+        finally:
+            ddb.close()
+    threading.Thread(target=_do_refresh, daemon=True).start()
+    return {"status": "refreshing", "message": "Cache refresh started in background"}
+
+
+@app.get("/CACHE-STATUS")
+def cache_status(db: Session = Depends(get_db)):
+    """Return cache statistics."""
+    site_count  = db.query(models.CachedSite).count()
+    alarm_count = db.query(models.CachedAlarm).count()
+    alarm_dates = db.query(models.CachedAlarm.alarm_date).distinct().all()
+    last_site   = db.query(models.CachedSite.fetched_at).order_by(models.CachedSite.fetched_at.desc()).first()
+    last_alarm  = db.query(models.CachedAlarm.fetched_at).order_by(models.CachedAlarm.fetched_at.desc()).first()
+    return {
+        "cached_sites":          site_count,
+        "cached_alarms":         alarm_count,
+        "cached_alarm_dates":    sorted([r[0] for r in alarm_dates]),
+        "sites_last_refreshed":  str(last_site[0]) if last_site else None,
+        "alarms_last_refreshed": str(last_alarm[0]) if last_alarm else None,
+    }
+
+
 class SendReportBody(PydanticBaseModel):
     extra_recipients: List[str] = []
 
@@ -2610,8 +3049,9 @@ def trigger_send_daily_report(
     ?report_date=YYYY-MM-DD → overrides the date shown in the report (default: today).
     body.extra_recipients → ad-hoc CCs added only for this send.
     """
-    from services.notification_service import send_report_now
-    result = send_report_now(
+    import importlib, services.notification_service as _ns
+    importlib.reload(_ns)
+    result = _ns.send_report_now(
         test_mode=test_mode,
         extra_recipients=body.extra_recipients or None,
         report_date=report_date,
@@ -2620,6 +3060,27 @@ def trigger_send_daily_report(
         raise HTTPException(400, result.get("error", "Failed to send report"))
     msg = "Test reports sent to test recipients only." if test_mode else "Daily reports sent successfully."
     return {"status": "success", "message": msg}
+
+
+@app.get("/DEBUG-CITY-MAP")
+def debug_city_map():
+    import pandas as pd, os
+    emp_path = os.path.join("data", "daily", "employee.xlsx")
+    if not os.path.exists(emp_path):
+        return {"error": "employee file not found", "path": os.path.abspath(emp_path)}
+    df = pd.read_excel(emp_path)
+    df.columns = df.columns.astype(str).str.strip()
+    cols = list(df.columns)
+    city_col = next((c for c in cols if any(x.lower() in c.lower() for x in ["City","Circle","Region","Zone","State","Location"])), None)
+    name_col = next((c for c in cols if any(x.lower() in c.lower() for x in ["Full Name","Executive Full","Name"])), None)
+    result = {}
+    if city_col and name_col:
+        for _, row in df.iterrows():
+            name = str(row.get(name_col, "")).strip()
+            city = str(row.get(city_col, "")).strip()
+            if name and city and city.lower() not in ["nan","none",""]:
+                result[name] = city
+    return {"city_col": city_col, "name_col": name_col, "map": result}
 
 
 # =====================================================
@@ -2766,6 +3227,18 @@ def delete_management_recipient(email: str):
     _write_config(cfg)
     return {"status": "ok", "management_recipients": cfg["management_recipients"]}
 
+@app.put("/REPORTING-CONFIG/MANAGEMENT/{email:path}")
+def update_management_recipient(email: str, body: ManagementRecipientBody):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    recipients = cfg.get("management_recipients", [])
+    cfg["management_recipients"] = [
+        {"name": body.name, "email": body.email} if r["email"] == email else r
+        for r in recipients
+    ]
+    _write_config(cfg)
+    return {"status": "ok", "management_recipients": cfg["management_recipients"]}
+
 @app.get("/REPORTING-CONFIG/TEST-MODE")
 def get_test_mode_status():
     from services.notification_service import _read_config
@@ -2824,8 +3297,9 @@ def trigger_send_test_report(report_type: str, report_date: str = None):
     valid = {"management", "circles", "managers"}
     if report_type not in valid:
         raise HTTPException(400, f"Invalid report_type. Must be one of: {sorted(valid)}")
-    from services.notification_service import send_report_now
-    result = send_report_now(test_mode=True, send_types={report_type}, report_date=report_date)
+    import importlib, services.notification_service as _ns
+    importlib.reload(_ns)
+    result = _ns.send_report_now(test_mode=True, send_types={report_type}, report_date=report_date)
     if not result.get("success"):
         raise HTTPException(400, result.get("error", "Failed to send test report"))
     return {"status": "success", "message": f"Test {report_type} report sent to test recipients"}
@@ -2868,29 +3342,44 @@ def _detect_data_date(contents: bytes, filename: str, file_type: str):
     if file_type in ("employee", "managers"):
         return None
 
-    def _parse_date_str(s):
+    # Forms-filled files are exported with today's timestamp in the filename,
+    # which would give the wrong date — skip filename detection for them.
+    SKIP_FILENAME_DATE = {"forms", "forms_filled", "forms_combined"}
+
+    def _parse_date_str(s, dayfirst=True):
+        """Parse a date string, preferring DD-MM-YYYY (Indian format) by default."""
         try:
-            d = pd.to_datetime(s, dayfirst=False, errors="coerce")
+            d = pd.to_datetime(s, dayfirst=dayfirst, errors="coerce")
             if pd.isnull(d):
-                d = pd.to_datetime(s, dayfirst=True, errors="coerce")
+                d = pd.to_datetime(s, dayfirst=(not dayfirst), errors="coerce")
             if not pd.isnull(d) and 2020 <= d.year <= 2035:
                 return str(d.date())
         except Exception:
             pass
         return None
 
-    # ── 1. Parse date from filename ───────────────────────────────────────
-    fn = os.path.splitext(filename)[0]
-    for pat in [
-        r'(\d{4}[-_]\d{2}[-_]\d{2})',   # YYYY-MM-DD / YYYY_MM_DD
-        r'(\d{2}[-_]\d{2}[-_]\d{4})',   # DD-MM-YYYY / DD_MM_YYYY
-        r'(\d{8})',                       # YYYYMMDD
-    ]:
-        m = re.search(pat, fn)
-        if m:
-            d = _parse_date_str(m.group(1))
-            if d:
-                return d
+    def _most_common_date(series, dayfirst=True):
+        """Parse a pandas Series of date strings and return the most frequent date."""
+        parsed = pd.to_datetime(series, dayfirst=dayfirst, errors="coerce").dropna()
+        if len(parsed) == 0:
+            parsed = pd.to_datetime(series, dayfirst=(not dayfirst), errors="coerce").dropna()
+        if len(parsed) > 0:
+            return str(parsed.dt.date.value_counts().idxmax())
+        return None
+
+    # ── 1. Parse date from filename (skipped for forms files) ─────────────
+    if file_type not in SKIP_FILENAME_DATE:
+        fn = os.path.splitext(filename)[0]
+        for pat, day_first in [
+            (r'(\d{4}[-_]\d{2}[-_]\d{2})', False),  # YYYY-MM-DD → year first, no dayfirst
+            (r'(\d{2}[-_]\d{2}[-_]\d{4})', True),   # DD-MM-YYYY → day first
+            (r'(\d{8})',                    False),  # YYYYMMDD
+        ]:
+            m = re.search(pat, fn)
+            if m:
+                d = _parse_date_str(m.group(1), dayfirst=day_first)
+                if d:
+                    return d
 
     # ── 2–4. Parse from file contents ─────────────────────────────────────
     try:
@@ -2908,22 +3397,22 @@ def _detect_data_date(contents: bytes, filename: str, file_type: str):
             if d:
                 return d
 
-        # 3. Columns with date-like names (catches forms: "Action Date" → "2026-05-06")
-        date_hints = ["date", "day", "sodn start", "sodn_start", "start time",
-                      "alarm start", "created", "timestamp", "reported", "action date"]
+        # 3. Columns with date-like names (catches forms: "Action Date" → "2026-05-08")
+        date_hints = ["action date", "date", "day", "sodn start", "sodn_start",
+                      "start time", "alarm start", "created", "timestamp", "reported"]
         for col in df.columns:
             if any(h in col.lower() for h in date_hints):
-                sample = df[col].replace("", pd.NA).dropna().head(20)
-                parsed = pd.to_datetime(sample, errors="coerce").dropna()
-                if len(parsed) > 0:
-                    return str(parsed.dt.date.value_counts().idxmax())
+                sample = df[col].replace("", pd.NA).dropna().head(50)
+                d = _most_common_date(sample)
+                if d:
+                    return d
 
         # 4. Broad scan — first column where 60%+ values parse as dates
         for col in df.columns:
             sample = df[col].replace("", pd.NA).dropna().head(10)
             if len(sample) == 0:
                 continue
-            parsed = pd.to_datetime(sample, errors="coerce").dropna()
+            parsed = pd.to_datetime(sample, dayfirst=True, errors="coerce").dropna()
             if len(parsed) >= max(1, len(sample) * 0.6):
                 return str(parsed.dt.date.value_counts().idxmax())
     except Exception:

@@ -47,7 +47,43 @@ class FormTemplate(Base):
     __tablename__ = "form_templates"
 
     id         = Column(Integer, primary_key=True, index=True)
-    form_name  = Column(String(255), unique=True, index=True)  # ✅ FIXED
+    form_name  = Column(String(255), unique=True, index=True)
     columns    = Column(Text)
     rules      = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CachedSite(Base):
+    __tablename__ = "cached_sites"
+
+    id                 = Column(Integer, primary_key=True, index=True)
+    site_id            = Column(String(100))
+    site_name          = Column(String(255))
+    circle             = Column(String(150))
+    h1                 = Column(String(150))
+    h2                 = Column(String(150))
+    imei_no            = Column(String(100), index=True)
+    battery_v          = Column(String(50))
+    signal_dbm         = Column(String(50))
+    last_communication = Column(String(100))
+    aging              = Column(String(100))
+    fetched_at         = Column(DateTime, default=datetime.utcnow)
+
+
+class CachedAlarm(Base):
+    __tablename__ = "cached_alarms"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    global_id  = Column(String(100))
+    site_name  = Column(String(255))
+    circle     = Column(String(150))
+    district   = Column(String(150))
+    cluster    = Column(String(150))
+    alarm_name = Column(String(255))
+    start_time = Column(String(30), index=True)
+    end_time   = Column(String(30))
+    imei       = Column(String(100), index=True)
+    volt       = Column(String(50))
+    is_active  = Column(Integer, default=0)
+    alarm_date = Column(String(12), index=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow)

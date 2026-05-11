@@ -103,6 +103,7 @@ DAILY_FILES = {
     "forms_filled": os.path.join(DAILY_DIR, "forms_filled.xlsx"),
     "alarm":        os.path.join(DAILY_DIR, "alarm.csv"),
     "active_sites": os.path.join(DAILY_DIR, "active_sites.xlsx"),
+    "site_master":  os.path.join(DAILY_DIR, "site_master.xlsx"),
 }
 
 # Legacy fallback paths (used only if daily files not uploaded yet)
@@ -923,14 +924,42 @@ def _normalize_circle(raw):
 
     return s
 
+def _build_name_city_map():
+    """Read city/circle for every employee directly from the uploaded employee file."""
+    import pandas as pd
+    _emp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "daily", "employee.xlsx")
+    if not os.path.exists(_emp_path):
+        return {}
+    try:
+        df = pd.read_excel(_emp_path)
+        df.columns = df.columns.astype(str).str.strip()
+        cols = list(df.columns)
+        city_col = _find_col(cols, ["Circle", "Circle Name", "Telecom Circle", "City", "Location", "Region", "Zone", "State"])
+        name_col = _find_col(cols, ["Field Executive Full Name", "Full Name", "Employee Name", "Emp Name", "Name"])
+        if not city_col or not name_col:
+            return {}
+        result = {}
+        for _, row in df.iterrows():
+            name = str(row.get(name_col, "")).strip()
+            city = str(row.get(city_col, "")).strip()
+            if name and city and city.lower() not in ["nan", "none", ""]:
+                result[name] = city
+        return result
+    except Exception:
+        return {}
+
+
 def build_management_email(management_data, site_down_data, report_date, excel_rows=None, site_total_data=None):
     total_staff      = sum(len(v) for v in management_data.values())
     total_present    = sum(present_count(v) for v in management_data.values())
     total_absent     = sum(absent_count(v) for v in management_data.values())
     total_sites_down = sum(len(v) for v in site_down_data.values())
 
+    # Always read circle from the uploaded employee file — source of truth
+    _name_city = _build_name_city_map()
+
     absentees = [
-        {"name": u["user"], "circle": circle}
+        {"name": u["user"], "circle": _name_city.get(u["user"]) or u.get("circle") or circle}
         for circle, users_list in management_data.items()
         for u in users_list
         if str(u.get("attendance", "")).strip().lower() in ["absent", "a", "no"]
@@ -985,17 +1014,27 @@ def build_management_email(management_data, site_down_data, report_date, excel_r
 # EXCEL REPORT GENERATOR
 # =====================================================
 
-def _validated_remark(attendance, forms_count):
+def _validated_remark(attendance, forms_count, gps=None, site_visit=False, site_master_status=None):
     att = str(attendance).strip().lower()
-    if att in ["a", "absent"]:       return "On Leave"
-    if att in ["wfh"]:               return "WFH"
-    if att in ["wfo"]:               return "WFO"
+    if att in ["a", "absent", "--", "-", ""]:
+        return "On leave"
+    # Site master status overrides everything for present employees
+    if site_master_status and str(site_master_status).strip().lower() not in ["nan", "none", ""]:
+        return str(site_master_status).strip()
+    if gps in ("WFH", "WFO"):
+        if forms_count > 0 or site_visit:
+            return "Work done, Verified"
+        return "NA"
+    if att in ["wfh", "wfo"]:
+        return "NA"
     if att in ["p", "present", "yes"]:
-        return "Work done, Verified" if forms_count > 0 else "No work done"
-    return str(attendance).strip() or "N/A"
+        if forms_count > 0 or site_visit:
+            return "Work done, Verified"
+        return "No form filled"
+    return str(attendance).strip() or "NA"
 
 
-def build_excel_report(rows, report_date, title="Productivity Report", sites_down=None, wfh_wfo_map=None):
+def build_excel_report(rows, report_date, title="Productivity Report", sites_down=None, wfh_wfo_map=None, site_visit_status=None):
     """
     rows: list of dicts with keys:
       full_name, username, circle, business_domain, role,
@@ -1008,6 +1047,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
       3. Sites Down (if sites_down provided)
     """
     _gps = {str(k).strip().lower(): v for k, v in (wfh_wfo_map or {}).items()}
+    _sv  = {str(k).strip().lower(): str(v).strip() for k, v in (site_visit_status or {}).items()}
     import openpyxl
     from openpyxl.styles import (PatternFill, Font, Alignment, Border, Side)
     from openpyxl.utils import get_column_letter
@@ -1070,6 +1110,10 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
 
     # Data rows
     for ri, row in enumerate(rows, 3):
+        uname = str(row.get("username", "")).strip().lower()
+        fname = str(row.get("full_name", "")).strip().lower()
+        gps   = _gps.get(uname)
+        sm_status = _sv.get(uname) or _sv.get(fname)
         vals = [
             row.get("full_name", ""),
             row.get("username", ""),
@@ -1080,7 +1124,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             row.get("distance", 0),
             row.get("forms_count", 0),
             row.get("form_types", ""),
-            _validated_remark(row.get("attendance", ""), row.get("forms_count", 0)),
+            _validated_remark(row.get("attendance", ""), row.get("forms_count", 0), gps, site_master_status=sm_status),
         ]
         fill = alt_fill(ri)
         for ci, val in enumerate(vals, 1):
@@ -1110,17 +1154,18 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     emp_data    = defaultdict(list)
 
     for row in rows:
-        circle     = row.get("circle", "Other")
-        uname      = str(row.get("username", "")).strip().lower()
-        att_status = _validated_remark(row.get("attendance", ""), row.get("forms_count", 0))
-        gps        = _gps.get(uname)  # "WFH", "WFO", or None
+        circle = row.get("circle", "Other")
+        uname  = str(row.get("username", "")).strip().lower()
+        fname  = str(row.get("full_name", "")).strip().lower()
+        gps    = _gps.get(uname)
+        sm_status = _sv.get(uname) or _sv.get(fname)
+        att_status = _validated_remark(row.get("attendance", ""), row.get("forms_count", 0), gps, site_master_status=sm_status)
 
         circle_emp[circle] += 1
 
-        if gps in ("WFH", "WFO") and att_status != "On Leave":
+        if gps in ("WFH", "WFO") and att_status not in ("On leave",):
             if att_status == "Work done, Verified":
                 circle_att[circle]["Work done, Verified"] += 1
-            # "No work done" is suppressed when GPS is available
             circle_gps[circle][gps] += 1
         else:
             circle_att[circle][att_status] += 1
@@ -1389,6 +1434,35 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     employee_df.columns   = employee_df.columns.astype(str).str.strip()
     attendance_df.columns = attendance_df.columns.astype(str).str.strip()
 
+    # ---- Load site master — build username/name → Status mapping ----
+    _site_visit_status: dict = {}
+    _site_master_path = DAILY_FILES.get("site_master", "")
+    if _site_master_path and os.path.exists(_site_master_path):
+        try:
+            _sm_df = pd.read_excel(_site_master_path) if not _site_master_path.endswith(".csv") else pd.read_csv(_site_master_path, dtype=str, encoding="latin-1")
+            _sm_df.columns = _sm_df.columns.astype(str).str.strip()
+            _sm_cols = list(_sm_df.columns)
+            _sm_uname_col  = _find_col(_sm_cols, ["Field Executive Username", "FE Username", "Username", "User Name", "User ID"])
+            _sm_name_col   = _find_col(_sm_cols, ["Field Executive Full Name", "Full Name", "Employee Name", "Name"])
+            _sm_status_col = _find_col(_sm_cols, ["Status", "Visit Status", "Site Status", "Remark", "Remarks"])
+            print(f"[Report] Site master columns: {_sm_cols}")
+            print(f"[Report] Site master status column: {_sm_status_col}")
+            for _, r in _sm_df.iterrows():
+                status_val = str(r.get(_sm_status_col, "")).strip() if _sm_status_col else ""
+                if status_val.lower() in ("nan", "none", ""):
+                    status_val = ""
+                if _sm_uname_col:
+                    u = str(r.get(_sm_uname_col, "")).strip().lower()
+                    if u and u not in ("nan", "none", ""):
+                        _site_visit_status[u] = status_val
+                if _sm_name_col:
+                    n = str(r.get(_sm_name_col, "")).strip().lower()
+                    if n and n not in ("nan", "none", ""):
+                        _site_visit_status[n] = status_val
+            print(f"[Report] Site master loaded: {len(_site_visit_status)} records with status mapping")
+        except Exception as e:
+            print(f"[Report] Site master read error: {e}")
+
     # ---- Load active employee whitelist ----
     _active_emp_path = os.path.join(os.path.dirname(__file__), "..", "data", "active_employees.json")
     _active_norm_usernames: set = set()
@@ -1423,7 +1497,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     ])
 
     circle_col = _find_col(emp_cols, [
-        "Circle", "Circle Name", "Telecom Circle",
+        "Circle", "Circle Name", "Telecom Circle", "City", "Location", "Region", "Zone", "State",
     ])
 
     email_col = _find_col(emp_cols, [
@@ -1746,13 +1820,16 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
         raw_name  = row.get(full_name_col) if full_name_col else None
         user_name = str(raw_name).strip() if raw_name and str(raw_name).lower() not in ["nan", "none", ""] else username
 
-        # Circle — hierarchy walk is authoritative; only fall back to direct column
-        # when the hierarchy can't resolve (returns "Other")
-        circle = find_circle(username)
-        if circle == "Other" and circle_col:
+        # Circle — prefer direct column from uploaded file; fall back to hierarchy walk
+        circle = "Other"
+        if circle_col:
             cv = row.get(circle_col)
             if cv and str(cv).strip().lower() not in ["nan", "none", ""]:
                 circle = _normalize_circle(str(cv).strip())
+        if circle == "Other":
+            circle = find_circle(username)
+        if username in ("vaibhav_st", "karishma_st") or "vaibhav" in username or "karishma" in username:
+            print(f"[DEBUG circle] user={username} circle_col={circle_col} cv={row.get(circle_col) if circle_col else 'N/A'} circle={circle}")
 
         # Manager — look up by normalised username (handles _st_TIMESTAMP suffix mismatches)
         norm_uname = _norm_uname(username)
@@ -1816,6 +1893,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
 
         user_record = {
             "user":       user_name,
+            "circle":     circle,
             "attendance": attendance,
             "distance":   distance,
             "form_names": form_display,
@@ -2031,7 +2109,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             mgr_rows = [r for r in excel_rows if r["manager"] == manager]
             body = build_manager_email(manager, users, report_date, excel_rows=mgr_rows)
             try:
-                xl_bytes  = build_excel_report(mgr_rows, report_date, f"Manager Report — {manager}", wfh_wfo_map=_wfh_wfo_map)
+                xl_bytes  = build_excel_report(mgr_rows, report_date, f"Manager Report — {manager}", wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status)
                 xl_name   = f"Manager_Report_{manager.replace(' ', '_')}_{report_date.replace(' ', '_')}.xlsx"
             except Exception as xe:
                 print(f"[Report] Excel build failed for manager {manager}: {xe}")
@@ -2066,7 +2144,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                           for s in site_down_data.get(circle, [])]
             try:
                 xl_bytes = build_excel_report(circ_rows, report_date, f"Circle Report — {circle}",
-                                              sites_down=circ_sites, wfh_wfo_map=_wfh_wfo_map)
+                                              sites_down=circ_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status)
                 xl_name  = f"Circle_Report_{circle.replace(' ', '_').replace('&','and')}_{report_date.replace(' ', '_')}.xlsx"
             except Exception as xe:
                 print(f"[Report] Excel build failed for circle {circle}: {xe}")
@@ -2095,7 +2173,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                      for c, sites in site_down_data.items() for s in sites]
         try:
             xl_bytes = build_excel_report(excel_rows, report_date, "All Circles Productivity Report",
-                                          sites_down=all_sites, wfh_wfo_map=_wfh_wfo_map)
+                                          sites_down=all_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status)
             xl_name  = f"Productivity_Report_All_{report_date.replace(' ', '_')}.xlsx"
         except Exception as xe:
             print(f"[Report] Excel build failed for management report: {xe}")

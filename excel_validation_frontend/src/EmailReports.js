@@ -6,7 +6,10 @@ import {
   Trash2, AlertTriangle, Calendar, Settings,
 } from "lucide-react";
 
-const API = "http://127.0.0.1:8000";
+const API = "http://127.0.0.1:8001";
+
+
+
 
 const T = {
   red:      "#CC0000",
@@ -56,6 +59,7 @@ const FILE_SLOTS = [
     accept:      ".xlsx,.xls",
     icon:        FileSpreadsheet,
     freq:        "Daily",
+    noDateCheck: true,
   },
   {
     key:         "alarm",
@@ -72,6 +76,7 @@ const FILE_SLOTS = [
     accept:      "*",
     icon:        FileText,
     freq:        "Daily",
+    noDateCheck: true,
   },
   {
     key:         "site_master",
@@ -554,6 +559,9 @@ export default function EmailReports() {
   const [editingHead,     setEditingHead]     = useState(null);
   const [headForm,        setHeadForm]        = useState({ circle:"", head:"", email:"", phone:"" });
   const [showAddHead,     setShowAddHead]     = useState(false);
+  const [showAddMgmt,     setShowAddMgmt]     = useState(false);
+  const [editingMgmt,     setEditingMgmt]     = useState(null);
+  const [mgmtForm,        setMgmtForm]        = useState({ name:"", email:"" });
   const [editingManager,  setEditingManager]  = useState(null);
   const [managerForm,     setManagerForm]     = useState({ name:"", email:"", circle:"" });
   const [showAddManager,  setShowAddManager]  = useState(false);
@@ -672,6 +680,7 @@ export default function EmailReports() {
 
   useEffect(() => { initAll(); }, [initAll]);
 
+
   const handleSaveWfhConfig = async () => {
     if (!wfhConfigDraft) return;
     setSavingWfhConfig(true);
@@ -783,6 +792,19 @@ export default function EmailReports() {
       showToast("success", `Manager "${name}" removed.`);
     } catch (e) {
       showToast("error", e.response?.data?.detail || "Delete failed.");
+    } finally { setSavingConfig(false); }
+  };
+
+  const handleSaveMgmt = async () => {
+    if (!mgmtForm.name || !mgmtForm.email) { showToast("error", "Name and email are required."); return; }
+    setSavingConfig(true);
+    try {
+      await axios.put(`${API}/REPORTING-CONFIG/MANAGEMENT/${encodeURIComponent(editingMgmt.email)}`, { name: mgmtForm.name, email: mgmtForm.email });
+      await fetchConfig();
+      setEditingMgmt(null);
+      showToast("success", "Management member updated.");
+    } catch (e) {
+      showToast("error", e.response?.data?.detail || "Failed to update.");
     } finally { setSavingConfig(false); }
   };
 
@@ -1278,6 +1300,114 @@ export default function EmailReports() {
         )}
         {showConfigPanel && config && (
           <div style={{ padding:"0 24px 24px", display:"flex", flexDirection:"column", gap:20 }}>
+
+            {/* ── management table ── */}
+            <div>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+                <p style={{ margin:0, fontSize:13.5, fontWeight:700, color:T.black }}>Management</p>
+                <button
+                  onClick={() => { setShowAddMgmt(true); setEditingMgmt(null); setHeadForm({ circle:"", head:"", email:"", phone:"" }); }}
+                  style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 14px", borderRadius:8,
+                    border:`1px solid ${T.red}`, background:T.redLight, color:T.red,
+                    fontSize:12.5, fontWeight:600, cursor:"pointer", fontFamily:"'DM Sans',sans-serif" }}
+                >+ Add Member</button>
+              </div>
+
+              <div style={{ border:"1px solid #E5E7EB", borderRadius:10, overflow:"hidden" }}>
+                {/* table header */}
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr auto",
+                  background:"#F9FAFB", padding:"9px 14px", gap:12,
+                  fontSize:10.5, fontWeight:700, color:T.grey500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                  <span>Name</span><span>Email</span><span>Actions</span>
+                </div>
+                {(config.management_recipients || []).map((m, i) => (
+                  <div key={m.email || i} style={{
+                    display:"grid", gridTemplateColumns:"1fr 1.5fr auto",
+                    padding:"10px 14px", gap:12, alignItems:"center",
+                    borderTop: i===0 ? "none" : "1px solid #F3F4F6",
+                    background: editingMgmt?.email === m.email ? "#FFF8F8" : "#fff",
+                  }}>
+                    {editingMgmt?.email === m.email ? (
+                      <>
+                        <input value={mgmtForm.name} onChange={e => setMgmtForm(f => ({ ...f, name: e.target.value }))}
+                          style={inputStyle} placeholder="Name" />
+                        <input value={mgmtForm.email} onChange={e => setMgmtForm(f => ({ ...f, email: e.target.value }))}
+                          style={inputStyle} placeholder="Email" type="email" />
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button onClick={handleSaveMgmt} disabled={savingConfig}
+                            style={actionBtn(T.red, T.redLight)}>Save</button>
+                          <button onClick={() => setEditingMgmt(null)} style={actionBtn(T.grey500,"#F3F4F6")}>✕</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ fontSize:13, fontWeight:600, color:T.black }}>{m.name}</span>
+                        <span style={{ fontSize:12.5, color:T.grey500, wordBreak:"break-all" }}>{m.email}</span>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <button onClick={() => { setEditingMgmt(m); setMgmtForm({ name: m.name, email: m.email }); setShowAddMgmt(false); }}
+                            style={actionBtn("#0369a1","rgba(3,105,161,0.07)")}>Edit</button>
+                          <button onClick={async () => {
+                            if (window.confirm(`Remove ${m.name} from management?`)) {
+                              try {
+                                await axios.delete(`${API}/REPORTING-CONFIG/MANAGEMENT/${encodeURIComponent(m.email)}`);
+                                await fetchConfig();
+                                showToast("success", `${m.name} removed from management.`);
+                              } catch (e) {
+                                showToast("error", "Failed to remove.");
+                              }
+                            }
+                          }} style={actionBtn(T.red, T.redLight)}>Del</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+
+                {/* inline add row */}
+                {showAddMgmt && (
+                  <div style={{
+                    display:"grid", gridTemplateColumns:"1fr 1.5fr auto",
+                    padding:"10px 14px", gap:8, alignItems:"center",
+                    borderTop:"1px solid #F3F4F6", background:"#FFF8F8",
+                  }}>
+                    <input type="text" placeholder="Name"
+                      value={headForm.head}
+                      onChange={e => setHeadForm(f => ({ ...f, head: e.target.value }))}
+                      style={inputStyle} />
+                    <input type="email" placeholder="Email"
+                      value={headForm.email}
+                      onChange={e => setHeadForm(f => ({ ...f, email: e.target.value }))}
+                      style={inputStyle} />
+                    <div style={{ display:"flex", gap:6 }}>
+                      <button
+                        onClick={async () => {
+                          if (!headForm.head || !headForm.email) { showToast("error", "Name and email are required."); return; }
+                          setSavingConfig(true);
+                          try {
+                            await axios.post(`${API}/REPORTING-CONFIG/MANAGEMENT`, { name: headForm.head, email: headForm.email });
+                            await fetchConfig();
+                            setHeadForm({ circle:"", head:"", email:"", phone:"" });
+                            setShowAddMgmt(false);
+                            showToast("success", "Management member added.");
+                          } catch (e) {
+                            showToast("error", e.response?.data?.detail || "Failed to add.");
+                          } finally { setSavingConfig(false); }
+                        }}
+                        disabled={savingConfig}
+                        style={actionBtn(T.red, T.redLight)}>Save</button>
+                      <button onClick={() => { setShowAddMgmt(false); setHeadForm({ circle:"", head:"", email:"", phone:"" }); }}
+                        style={actionBtn(T.grey500,"#F3F4F6")}>✕</button>
+                    </div>
+                  </div>
+                )}
+
+                {(config.management_recipients || []).length === 0 && !showAddMgmt && (
+                  <div style={{ padding:"10px 14px", fontSize:12, color:T.grey500, textAlign:"center" }}>
+                    No management members configured
+                  </div>
+                )}
+              </div>
+            </div>
 
             {/* ── circle heads table ── */}
             <div>

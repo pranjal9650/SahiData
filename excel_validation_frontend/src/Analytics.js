@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useCallback } from "react";
 import axios from "axios";
-import SiteAnalytics from "./SiteAnalytics";
 
-const BASE_URL = "http://127.0.0.1:8000";
+const BASE_URL = "http://127.0.0.1:8001";
 
 const T = {
   red:      "#CC0000",
@@ -60,7 +59,6 @@ function MiniAccuracy({ valid, total }) {
 }
 
 function Analytics() {
-  const [analyticsView, setAnalyticsView]             = useState("forms");
   const [gridData, setGridData]                       = useState([]);
   const [allFormNames, setAllFormNames]               = useState([]);
   const [formRules, setFormRules]                     = useState({});
@@ -154,64 +152,8 @@ function Analytics() {
     row.username?.toLowerCase().includes(searchUsername.toLowerCase())
   );
 
-  return (
+return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24, fontFamily: "'DM Sans', sans-serif" }}>
-
-      {/* ── Top Toggle: Form Analytics | Site Analytics ── */}
-      <div style={{
-        display: "flex", background: T.grey100,
-        borderRadius: 11, padding: 4,
-        border: `1px solid ${T.grey200}`, gap: 2,
-        width: "fit-content",
-      }}>
-        {[
-          {
-            key: "forms",
-            label: "Form Analytics",
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
-              </svg>
-            ),
-          },
-          {
-            key: "sites",
-            label: "Site Analytics",
-            icon: (
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
-              </svg>
-            ),
-          },
-        ].map(({ key, label, icon }) => {
-          const isActive = analyticsView === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setAnalyticsView(key)}
-              style={{
-                display: "inline-flex", alignItems: "center", gap: 7,
-                padding: "8px 20px", borderRadius: 8, border: "none",
-                background: isActive ? T.white : "transparent",
-                color: isActive ? (key === "sites" ? T.red : T.text) : T.muted,
-                fontWeight: isActive ? 700 : 500,
-                fontSize: 13.5, fontFamily: "'DM Sans', sans-serif",
-                boxShadow: isActive ? "0 1px 4px rgba(0,0,0,0.10)" : "none",
-                cursor: "pointer", transition: "all 0.15s ease",
-              }}
-            >
-              {icon}
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* ── Site Analytics ── */}
-      {analyticsView === "sites" && <SiteAnalytics />}
-
-      {/* ── Form Analytics ── */}
-      {analyticsView === "forms" && (<>
 
       {/* ── Filters ── */}
       <div style={{
@@ -372,85 +314,6 @@ function Analytics() {
           </button>
         </div>
 
-        {/* Row 2: View toggle */}
-        <div style={{
-          padding: "10px 20px",
-          background: T.grey100,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-        }}>
-          <span style={{
-            fontSize: 11,
-            fontWeight: 700,
-            color: T.muted,
-            textTransform: "uppercase",
-            letterSpacing: "0.7px",
-            marginRight: 4,
-          }}>
-            View
-          </span>
-
-          {[
-            {
-              label: "Form Analytics",
-              value: false,
-              icon: (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>
-                </svg>
-              ),
-            },
-            {
-              label: "Circle Analytics",
-              value: true,
-              icon: (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                </svg>
-              ),
-            },
-          ].map(({ label, value, icon }) => {
-            const on = showCircleAnalytics === value;
-            return (
-              <button
-                key={label}
-                onClick={() => setShowCircleAnalytics(value)}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "0 14px",
-                  height: 32,
-                  borderRadius: 7,
-                  border: `1px solid ${on ? "rgba(204,0,0,0.22)" : T.grey200}`,
-                  background: on ? "rgba(204,0,0,0.07)" : T.white,
-                  color: on ? T.red : T.muted,
-                  fontSize: 12.5,
-                  fontWeight: on ? 700 : 500,
-                  fontFamily: "'DM Sans', sans-serif",
-                  cursor: "pointer",
-                  transition: "all 0.14s ease",
-                }}
-                onMouseEnter={(e) => {
-                  if (!on) {
-                    e.currentTarget.style.borderColor = "rgba(204,0,0,0.18)";
-                    e.currentTarget.style.color = T.red;
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (!on) {
-                    e.currentTarget.style.borderColor = T.grey200;
-                    e.currentTarget.style.color = T.muted;
-                  }
-                }}
-              >
-                {icon}
-                {label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
       {/* ── Loader ── */}
@@ -471,7 +334,6 @@ function Analytics() {
 
       {/* ── Tables ── */}
       {!loading && gridData.length > 0 && (
-        !showCircleAnalytics ? (
 
           /* ══ Form Analytics Table ════════════════════════════ */
           <div style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.grey200}`, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
@@ -612,7 +474,7 @@ function Analytics() {
                     );
                   })}
                 </tbody>
-              </table>
+</table>
             </div>
 
             <div style={{ padding: "12px 24px", borderTop: `1px solid ${T.grey200}`, display: "flex", gap: 16, fontSize: 12, color: T.muted }}>
@@ -621,78 +483,11 @@ function Analytics() {
               <span>Mini bars show per-cell accuracy</span>
             </div>
           </div>
+        )}
 
-        ) : (
-
-          /* ══ Circle Analytics Tables ═══════════════════════════ */
-          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-            {circleSummary && Object.keys(circleSummary).length === 0 && (
-              <div style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.grey200}`, padding: "40px 20px", textAlign: "center", color: T.muted, fontSize: 14 }}>
-                No circle-wise data available yet.
-              </div>
-            )}
-            {circleSummary && Object.keys(circleSummary).map((formName) => {
-              const entries    = Object.entries(circleSummary[formName] || {});
-              const grandTotal = entries.reduce((s, [, c]) => s + c, 0);
-
-              return (
-                <div key={formName} style={{ background: T.white, borderRadius: 14, border: `1px solid ${T.grey200}`, overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-                  <div style={{ padding: "16px 24px", borderBottom: `1px solid ${T.grey200}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div>
-                      <h3 style={{ fontSize: 14.5, fontWeight: 700, color: T.text, margin: 0 }}>{formName}</h3>
-                      <p style={{ fontSize: 12, color: T.muted, marginTop: 2 }}>Circle-wise submissions</p>
-                    </div>
-                    <span style={{ padding: "4px 12px", borderRadius: 99, background: T.redBg, color: T.red, fontSize: 12.5, fontWeight: 600 }}>
-                      {grandTotal.toLocaleString()} total
-                    </span>
-                  </div>
-
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5 }}>
-                      <thead>
-                        <tr>
-                          <th style={thStyle}>Circle</th>
-                          <th style={{ ...thStyle, textAlign: "center" }}>Submissions</th>
-                          <th style={{ ...thStyle, textAlign: "left" }}>Share</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {entries.sort(([, a], [, b]) => b - a).map(([circle, count], i) => {
-                          const pct = grandTotal ? Math.round((count / grandTotal) * 100) : 0;
-                          return (
-                            <tr key={circle}
-                              style={{ background: i % 2 === 0 ? T.white : T.grey100 }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(204,0,0,0.03)")}
-                              onMouseLeave={(e) => (e.currentTarget.style.background = i % 2 === 0 ? T.white : T.grey100)}
-                            >
-                              <td style={{ ...tdStyle, fontWeight: 600 }}>{circle}</td>
-                              <td style={{ ...tdStyle, textAlign: "center", fontWeight: 700 }}>{count.toLocaleString()}</td>
-                              <td style={tdStyle}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                                  <div style={{ flex: 1, height: 6, borderRadius: 99, background: T.grey200, overflow: "hidden", maxWidth: 120 }}>
-                                    <div style={{ height: "100%", borderRadius: 99, width: `${pct}%`, background: T.red, transition: "width 0.5s ease" }} />
-                                  </div>
-                                  <span style={{ fontSize: 12.5, fontWeight: 600, color: T.muted, minWidth: 32 }}>{pct}%</span>
-                                </div>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )
-      )}
-
-      </>)}
-
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-    </div>
-  );
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
 }
 
 export default Analytics;
