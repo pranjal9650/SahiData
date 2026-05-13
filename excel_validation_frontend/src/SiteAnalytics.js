@@ -1,7 +1,8 @@
-import React, { useEffect, useState, useCallback } from "react";
+﻿import React, { useEffect, useState, useCallback } from "react";
 import axios from "axios";
 
-const BASE_URL = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const BASE_URL = API_BASE;
 
 /* ─── Design tokens (identical to Analytics.js) ─────────────── */
 const T = {

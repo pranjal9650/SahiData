@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { Mail, Key, CheckCircle, AlertCircle, Eye, EyeOff, Save, Server } from "lucide-react";
 
-const API = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const API = API_BASE;
 
 const T = {
   red:      "#CC0000",

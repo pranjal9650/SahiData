@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
+import API_BASE from "./config";
 import { Upload, CheckCircle2, FileSpreadsheet, Loader2, AlertTriangle, ArrowRight, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
@@ -301,7 +302,7 @@ function UploadPage() {
   const [dynamicForms, setDynamicForms] = useState([]);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8001/GET-FORM-NAMES")
+    fetch(${API_BASE}/GET-FORM-NAMES`)
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) {
@@ -335,7 +336,7 @@ function UploadPage() {
     formData.append("date", selectedDate);
 
     try {
-      const res    = await fetch("http://127.0.0.1:8001/VALIDATE-FORM", {
+      const res    = await fetch(${API_BASE}/VALIDATE-FORM`, {
         method: "POST",
         body: formData,
       });

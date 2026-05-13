@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+﻿import React, { useState, useEffect, useRef } from "react";
 import { BookOpen, ChevronDown, ChevronRight, AlertCircle, Pencil, X, Check, Save } from "lucide-react";
 
-const BASE_URL = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const BASE_URL = API_BASE;
 
 const T = {
   red:         "#CC0000",

@@ -72,10 +72,5 @@
   "test_emails": [
     "pranjal.gupta@shaurryatele.com"
   ],
-  "management_recipients": [
-    {
-      "name": "Pranjal",
-      "email": "pranjal.gupta@shaurryatele.com"
-    }
-  ]
+  "management_recipients": []
 }

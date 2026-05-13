@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import {
   Upload, CheckCircle, AlertCircle, Clock, Send,
@@ -6,7 +6,8 @@ import {
   Trash2, AlertTriangle, Calendar, Settings,
 } from "lucide-react";
 
-const API = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const API = API_BASE;
 
 
 

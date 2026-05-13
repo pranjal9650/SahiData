@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from "react";
+﻿import React, { useState, useEffect } from "react";
+import API_BASE from "./config";
 import { Search, X, Database } from "lucide-react";
 
 const T = {
@@ -50,7 +51,7 @@ export default function FormData() {
   const [searchFocused, setSearchFocused]   = useState(false);
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8001/GET-FORM-NAMES")
+    fetch(${API_BASE}/GET-FORM-NAMES`)
       .then((r) => r.json())
       .then((d) => { if (Array.isArray(d)) setAllFormTypes(d.filter((f) => f !== "Others")); })
       .catch(() => setAllFormTypes([]))
@@ -79,7 +80,7 @@ export default function FormData() {
     setLoading(true); setMessage(""); setData([]);
     try {
       const q = selectedForms.length === allFormTypes.length ? "ALL" : selectedForms.join(",");
-      const res = await fetch(`http://127.0.0.1:8001/FORM-DATA-MULTI?forms=${encodeURIComponent(q)}`);
+      const res = await fetch(`${API_BASE}/FORM-DATA-MULTI?forms=${encodeURIComponent(q)}`);
       const result = await res.json();
       if (!Array.isArray(result) || result.length === 0) setMessage("No records found.");
       else setData(result);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from "react";
+﻿import React, { useEffect, useState, useCallback } from "react";
 import axios from "axios";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -11,7 +11,8 @@ import {
 } from "lucide-react";
 import SiteDashboard from "./SiteDashboard";
 
-const BASE_URL = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const BASE_URL = API_BASE;
 
 const T = {
   red:      "#CC0000",

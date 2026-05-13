@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
+﻿import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { ClipboardList, FileX } from "lucide-react";
 
-const BASE_URL = "http://127.0.0.1:8001";
+import API_BASE from "./config";
+const BASE_URL = API_BASE;
 
 const T = {
   red:     "#CC0000",
