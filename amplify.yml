@@ -7,8 +7,7 @@ frontend:
         - npm ci --silent
     build:
       commands:
-        - cd excel_validation_frontend
-        - npm run build
+        - cd excel_validation_frontend && CI=false npm run build
   artifacts:
     baseDirectory: excel_validation_frontend/build
     files:

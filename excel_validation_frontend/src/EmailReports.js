@@ -108,13 +108,6 @@ function relLabel(iso) {
   return `${days} days ago`;
 }
 
-function fmtTime(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleString("en-IN", {
-    day: "2-digit", month: "short", year: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: true,
-  });
-}
 
 // ── File card ─────────────────────────────────────────────────────────
 
@@ -537,7 +530,6 @@ export default function EmailReports() {
   const [status,          setStatus]          = useState({});
   const [uploadingKey,    setUploadingKey]    = useState(null);
   const [sending,         setSending]         = useState(false);
-  const [testSendingType, setTestSendingType] = useState(null);
   const [liveSendingType, setLiveSendingType] = useState(null);
   const [clearing,        setClearing]        = useState(false);
   const [toast,           setToast]           = useState(null);
@@ -953,41 +945,6 @@ export default function EmailReports() {
     } finally {
       setSending(false);
       setModalExtraEmails("");
-    }
-  };
-
-  const TEST_LABELS = {
-    management: "Management Email",
-    circles:    "Circle Head Emails",
-    managers:   "Manager Emails",
-  };
-
-  const handleTestSend = async (type) => {
-    if (serverOnline !== true) {
-      showToast("error", "Backend server is not running. Start uvicorn first.");
-      return;
-    }
-    const requiredFiles = ["employee_manager", "attendance", "distance", "forms_combined"];
-    const missing = requiredFiles.filter((k) => {
-      const slot = FILE_SLOTS.find(s => s.key === k);
-      const keys = slot?.combinedKeys || [k];
-      return keys.some(rk => !status[rk]?.uploaded);
-    });
-    if (missing.length > 0) {
-      const labels = missing.map((k) => FILE_SLOTS.find((s) => s.key === k)?.label || k);
-      showToast("error", `Upload these files first: ${labels.join(", ")}.`);
-      return;
-    }
-    if (!window.confirm(`Send test "${TEST_LABELS[type]}" to Pranjal only?`)) return;
-    setTestSendingType(type);
-    try {
-      await axios.post(`${API}/SEND-TEST-REPORT/${type}?report_date=${reportDate}`);
-      showToast("success", `Test "${TEST_LABELS[type]}" sent to ${testEmail}.`);
-    } catch (e) {
-      const msg = e.response?.data?.detail || "Test send failed — check backend logs.";
-      showToast("error", msg);
-    } finally {
-      setTestSendingType(null);
     }
   };
 
