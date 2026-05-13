@@ -7,7 +7,6 @@ frontend:
         - npm ci --silent
     build:
       commands:
-        - cd excel_validation_frontend
         - export CI=false
         - export DISABLE_ESLINT_PLUGIN=true
         - npm run build
