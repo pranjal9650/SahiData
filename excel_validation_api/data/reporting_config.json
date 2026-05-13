@@ -67,15 +67,15 @@
     }
   ],
   "mail_enabled": true,
-  "test_mode": true,
-  "test_email": "pranjalg.work@gmail.com",
+  "test_mode": false,
+  "test_email": "pranjal.gupta@shaurryatele.com",
   "test_emails": [
-    "pranjalg.work@gmail.com"
+    "pranjal.gupta@shaurryatele.com"
   ],
   "management_recipients": [
     {
-      "name": "Mahesh Chaudhary ",
-      "email": "mahesh@shaurryatele.com"
+      "name": "Pranjal",
+      "email": "pranjal.gupta@shaurryatele.com"
     }
   ]
 }

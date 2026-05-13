@@ -3239,6 +3239,70 @@ def update_management_recipient(email: str, body: ManagementRecipientBody):
     _write_config(cfg)
     return {"status": "ok", "management_recipients": cfg["management_recipients"]}
 
+_EMAIL_CONFIG_PATH = os.path.join("data", "email_config.json")
+
+@app.get("/EMAIL-CONFIG")
+def get_email_config():
+    try:
+        with open(_EMAIL_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        return {
+            "sender_email": cfg.get("sender_email", ""),
+            "has_password": bool(cfg.get("app_password", "")),
+            "smtp_host": cfg.get("smtp_host", "smtp.office365.com"),
+            "smtp_port": cfg.get("smtp_port", 587),
+        }
+    except Exception:
+        return {"sender_email": "", "has_password": False}
+
+class EmailConfigBody(PydanticBaseModel):
+    sender_email: str
+    app_password: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+
+@app.put("/EMAIL-CONFIG")
+def update_email_config(body: EmailConfigBody):
+    try:
+        existing = {}
+        if os.path.exists(_EMAIL_CONFIG_PATH):
+            with open(_EMAIL_CONFIG_PATH, encoding="utf-8") as f:
+                existing = json.load(f)
+        existing["sender_email"] = body.sender_email.strip()
+        if body.app_password.strip():
+            existing["app_password"] = body.app_password.strip()
+        if body.smtp_host.strip():
+            existing["smtp_host"] = body.smtp_host.strip()
+        existing["smtp_port"] = body.smtp_port
+        os.makedirs("data", exist_ok=True)
+        with open(_EMAIL_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(existing, f, indent=2)
+        return {"status": "ok", "sender_email": existing["sender_email"]}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@app.post("/EMAIL-CONFIG/TEST")
+def test_email_config(body: EmailConfigBody):
+    import smtplib as _smtp
+    host = body.smtp_host.strip() or "smtp.office365.com"
+    port = body.smtp_port or 587
+    server = None
+    try:
+        server = _smtp.SMTP(host, port, timeout=10)
+        server.starttls()
+        server.login(body.sender_email.strip(), body.app_password)
+        return {"success": True, "message": "Connection verified successfully."}
+    except _smtp.SMTPAuthenticationError:
+        raise HTTPException(400, "Authentication failed — email or password is incorrect.")
+    except _smtp.SMTPException as e:
+        raise HTTPException(400, f"SMTP error: {e}")
+    except Exception as e:
+        raise HTTPException(400, f"Connection failed: {e}")
+    finally:
+        if server:
+            try: server.quit()
+            except Exception: pass
+
 @app.get("/REPORTING-CONFIG/TEST-MODE")
 def get_test_mode_status():
     from services.notification_service import _read_config
@@ -3286,6 +3350,22 @@ def preview_recipients():
         raise HTTPException(400, result.get("error", "Could not build recipient list"))
     return result
 
+
+@app.post("/SEND-REPORT/{report_type}")
+def trigger_send_report_type(report_type: str, report_date: str = None):
+    """
+    Send a single report type to real recipients (test_mode=False).
+    report_type: "management" | "circles" | "managers"
+    """
+    valid = {"management", "circles", "managers"}
+    if report_type not in valid:
+        raise HTTPException(400, f"Invalid report_type. Must be one of: {sorted(valid)}")
+    import importlib, services.notification_service as _ns
+    importlib.reload(_ns)
+    result = _ns.send_report_now(test_mode=False, send_types={report_type}, report_date=report_date)
+    if not result.get("success"):
+        raise HTTPException(400, result.get("error", "Failed to send report"))
+    return {"status": "success", "message": f"{report_type.capitalize()} report sent to real recipients"}
 
 @app.post("/SEND-TEST-REPORT/{report_type}")
 def trigger_send_test_report(report_type: str, report_date: str = None):

@@ -1,4 +1,5 @@
 import os
+import json
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -6,8 +7,28 @@ from email.mime.image import MIMEImage
 from email.mime.base import MIMEBase
 from email import encoders
 
-SENDER_EMAIL = "pranjalg.work@gmail.com"
-APP_PASSWORD  = "ajgprixzqbqduhmw"
+_EMAIL_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "email_config.json")
+
+def _load_email_config():
+    try:
+        with open(_EMAIL_CONFIG_PATH, encoding="utf-8") as f:
+            cfg = json.load(f)
+        email = cfg.get("sender_email", "")
+        password = cfg.get("app_password", "")
+        smtp_host = cfg.get("smtp_host", "")
+        smtp_port = cfg.get("smtp_port", 587)
+        # auto-detect host only if not explicitly saved
+        if not smtp_host:
+            domain = email.split("@")[-1].lower() if "@" in email else ""
+            if domain == "gmail.com":
+                smtp_host = "smtp.gmail.com"
+            elif domain in ("outlook.com", "hotmail.com", "live.com", "msn.com"):
+                smtp_host = "smtp-mail.outlook.com"
+            else:
+                smtp_host = "smtp.office365.com"
+        return email, password, smtp_host, int(smtp_port)
+    except Exception:
+        return "", "", "smtp.office365.com", 587
 
 
 def send_email(recipients, subject, body, inline_images=None, attachments=None):
@@ -25,7 +46,6 @@ def send_email(recipients, subject, body, inline_images=None, attachments=None):
     # outer container — always mixed so we can attach files
     outer = MIMEMultipart("mixed")
     outer["Subject"] = subject
-    outer["From"]    = SENDER_EMAIL
     outer["To"]      = ", ".join(recipients)
 
     if inline_images:
@@ -53,15 +73,18 @@ def send_email(recipients, subject, body, inline_images=None, attachments=None):
             part.add_header("Content-Disposition", "attachment", filename=filename)
             outer.attach(part)
 
+    SENDER_EMAIL, APP_PASSWORD, smtp_host, smtp_port = _load_email_config()
+    outer["From"] = SENDER_EMAIL
+
     server = None
     try:
-        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server = smtplib.SMTP(smtp_host, smtp_port)
         server.starttls()
         server.login(SENDER_EMAIL, APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, recipients, outer.as_string())
-        print(f"[Email] Sent: {subject} to {recipients}")
+        print(f"[Email] Sent via {smtp_host}: {subject} to {recipients}")
     except smtplib.SMTPAuthenticationError:
-        print("[Email] Authentication failed — check sender email / App Password")
+        print(f"[Email] Authentication failed ({smtp_host}) — check sender email / password")
     except smtplib.SMTPException as e:
         print(f"[Email] SMTP error: {e}")
     except Exception as e:

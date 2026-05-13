@@ -20,6 +20,7 @@ import CreateForm from "./CreateForm";
 import Rules from "./Rules";
 import EmailReports from "./EmailReports";
 import SiteVisit from "./SiteVisit";
+import EmailSettings from "./EmailSettings";
 
 /* Logo */
 import logo from "./assets/logo.png";
@@ -435,7 +436,13 @@ const Layout = () => {
             <div style={{ width: 1, height: 22, background: th.border, margin: "0 6px" }} />
 
             {/* Avatar + name + logout grouped */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div
+              onClick={() => navigate("/email-settings")}
+              title="Email Settings"
+              style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", padding: "4px 8px", borderRadius: 9, transition: "background 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "rgba(0,0,0,0.05)"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+            >
               <div style={{
                 width: 34, height: 34, borderRadius: "50%",
                 background: T.red, color: T.white,
@@ -512,9 +519,10 @@ const Layout = () => {
             <Route path="/form-data"       element={<FormData />} />
             <Route path="/analytics"       element={<Analytics />} />
             <Route path="/site-monitoring" element={<SiteMonitoring />} />
-            <Route path="/email-reports"  element={<EmailReports />} />
-            <Route path="/site-visit"     element={<SiteVisit />} />
-            <Route path="*"               element={<Navigate to="/dashboard" />} />
+            <Route path="/email-reports"   element={<EmailReports />} />
+            <Route path="/site-visit"      element={<SiteVisit />} />
+            <Route path="/email-settings"  element={<EmailSettings />} />
+            <Route path="*"                element={<Navigate to="/dashboard" />} />
           </Routes>
         </div>
       </main>

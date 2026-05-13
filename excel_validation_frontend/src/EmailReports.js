@@ -537,6 +537,7 @@ export default function EmailReports() {
   const [uploadingKey,    setUploadingKey]    = useState(null);
   const [sending,         setSending]         = useState(false);
   const [testSendingType, setTestSendingType] = useState(null);
+  const [liveSendingType, setLiveSendingType] = useState(null);
   const [clearing,        setClearing]        = useState(false);
   const [toast,           setToast]           = useState(null);
   const [loading,         setLoading]         = useState(true);
@@ -989,6 +990,42 @@ export default function EmailReports() {
     }
   };
 
+  const LIVE_LABELS = {
+    management: { label: "Management Team",  desc: "All-circle summary",  recipients: "management recipients" },
+    circles:    { label: "Circle Heads",     desc: "One per circle",      recipients: "all circle heads"      },
+    managers:   { label: "Managers",         desc: "One per manager",     recipients: "all managers"          },
+  };
+
+  const handleLiveSend = async (type) => {
+    if (serverOnline !== true) {
+      showToast("error", "Backend server is not running. Start uvicorn first.");
+      return;
+    }
+    const requiredFiles = ["employee_manager", "attendance", "distance", "forms_combined"];
+    const missing = requiredFiles.filter((k) => {
+      const slot = FILE_SLOTS.find(s => s.key === k);
+      const keys = slot?.combinedKeys || [k];
+      return keys.some(rk => !status[rk]?.uploaded);
+    });
+    if (missing.length > 0) {
+      const labels = missing.map((k) => FILE_SLOTS.find((s) => s.key === k)?.label || k);
+      showToast("error", `Upload these files first: ${labels.join(", ")}.`);
+      return;
+    }
+    const info = LIVE_LABELS[type];
+    if (!window.confirm(`Send "${info.label}" email to ${info.recipients}?\n\nThis will send real emails to your configured recipients.`)) return;
+    setLiveSendingType(type);
+    try {
+      await axios.post(`${API}/SEND-REPORT/${type}?report_date=${reportDate}`);
+      showToast("success", `${info.label} email sent successfully.`);
+    } catch (e) {
+      const msg = e.response?.data?.detail || "Send failed — check backend logs.";
+      showToast("error", msg);
+    } finally {
+      setLiveSendingType(null);
+    }
+  };
+
   const required      = ["employee_manager", "attendance", "distance", "forms_combined"];
   const requiredReady = required.every((k) => {
     const slot = FILE_SLOTS.find(s => s.key === k);
@@ -1178,61 +1215,48 @@ export default function EmailReports() {
         </div>
       )}
 
-      {/* ── test email panel ── */}
-      <div style={{
-        background: "#fff", border: "1px solid #E5E2DC",
-        borderRadius: 14, padding: "18px 24px",
-      }}>
+      {/* ── send reports panel ── */}
+      <div style={{ background: "#fff", border: "1px solid #E5E2DC", borderRadius: 14, padding: "18px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-          <div style={{
-            width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-            background: "rgba(124,58,237,0.08)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <Send size={15} color="#7C3AED" />
+          <div style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: T.redLight, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Send size={15} color={T.red} />
           </div>
           <div>
-            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: T.black }}>Test Emails</p>
-            <p style={{ margin: 0, fontSize: 12, color: T.grey500 }}>
-              Sends to <strong>{testEmail}</strong> only — subjects prefixed with [TEST]
-            </p>
+            <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: T.black }}>Send Reports</p>
+            <p style={{ margin: 0, fontSize: 12, color: T.grey500 }}>Emails go directly to configured recipients</p>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {[
-            { type: "management", label: "Management Email",   desc: "All-circle summary" },
-            { type: "circles",    label: "Circle Head Emails", desc: "One per circle"      },
-            { type: "managers",   label: "Manager Emails",     desc: "One per manager"     },
-          ].map(({ type, label, desc }) => {
-            const busy = testSendingType === type;
-            const disabled = !!testSendingType || sending || serverOnline !== true;
+          {Object.entries(LIVE_LABELS).map(([type, info]) => {
+            const busy = liveSendingType === type;
+            const disabled = !!liveSendingType || sending || serverOnline !== true;
             return (
               <button
                 key={type}
-                onClick={() => handleTestSend(type)}
+                onClick={() => handleLiveSend(type)}
                 disabled={disabled}
                 style={{
                   display: "flex", flexDirection: "column", alignItems: "flex-start",
                   gap: 2, padding: "10px 16px", borderRadius: 10,
-                  border: "1.5px solid #7C3AED",
-                  background: busy ? "rgba(124,58,237,0.08)" : "transparent",
+                  border: `1.5px solid ${T.red}`,
+                  background: busy ? T.redLight : "transparent",
                   cursor: disabled ? "not-allowed" : "pointer",
                   opacity: disabled && !busy ? 0.5 : 1,
                   transition: "background .15s",
                   fontFamily: "'DM Sans', sans-serif",
                   minWidth: 170,
                 }}
-                onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = "rgba(124,58,237,0.08)"; }}
+                onMouseEnter={(e) => { if (!disabled) e.currentTarget.style.background = T.redLight; }}
                 onMouseLeave={(e) => { if (!busy) e.currentTarget.style.background = "transparent"; }}
               >
-                <span style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, color: "#7C3AED" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, color: T.red }}>
                   {busy
                     ? <RefreshCw size={13} style={{ animation: "spin 1s linear infinite" }} />
                     : <Send size={13} />}
-                  {busy ? "Sending…" : label}
+                  {busy ? "Sending…" : info.label}
                 </span>
-                <span style={{ fontSize: 11.5, color: T.grey500, paddingLeft: 20 }}>{desc}</span>
+                <span style={{ fontSize: 11.5, color: T.grey500, paddingLeft: 20 }}>{info.desc}</span>
               </button>
             );
           })}
