@@ -4,7 +4,7 @@ frontend:
     preBuild:
       commands:
         - cd excel_validation_frontend
-        - npm ci
+        - npm ci --silent
     build:
       commands:
         - cd excel_validation_frontend
