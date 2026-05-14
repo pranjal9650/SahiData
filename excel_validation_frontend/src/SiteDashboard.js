@@ -1,7 +1,7 @@
 ﻿import React, { useEffect, useState, useCallback, useMemo } from "react";
 import axios from "axios";
 import {
-  LineChart, Line, BarChart, Bar,
+  BarChart, Bar,
   XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from "recharts";
