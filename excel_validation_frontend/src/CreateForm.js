@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { fileStore } from "./utils/fileStore";
 import { useSearchParams } from "react-router-dom";
+import API_BASE from "./config";
 import {
   FileSpreadsheet, Plus, Trash2, ChevronDown, CheckCircle2,
   Hash, Type, List, Calendar, Clock, Fingerprint, Zap, DollarSign,
@@ -1961,7 +1962,7 @@ const CreateForm = () => {
     setMessage({ type: "", text: "" });
 
     try {
-      const saveRes = await fetch("http://localhost:8000/SAVE-FORM-RULES", {
+      const saveRes = await fetch(`${API_BASE}/SAVE-FORM-RULES`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ form_name: formatted, columns: validCols, rules }),
@@ -1985,7 +1986,7 @@ const CreateForm = () => {
         fileStore.formType = null;
         fileStore.date = null;
         try {
-          const valRes = await fetch("http://localhost:8000/VALIDATE-FORM", {
+          const valRes = await fetch(`${API_BASE}/VALIDATE-FORM`, {
             method: "POST",
             body: fd,
           });
