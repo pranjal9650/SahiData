@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   Upload, Search, Download, Trash2, MapPin,
-  CheckCircle, XCircle, Clock, Navigation2,
+  CheckCircle, XCircle, Clock, Navigation2, Plus, X,
 } from "lucide-react";
 
 /* ── Design tokens (match App.js) ─────────────────────────────── */
@@ -174,7 +174,6 @@ function fmtTime(val) {
   if (!s) return "–";
   let d;
   if (/^\d{9,13}$/.test(s)) {
-    // Unix timestamp: 10 digits = seconds, 13 digits = milliseconds
     const ms = s.length <= 10 ? Number(s) * 1000 : Number(s);
     d = new Date(ms);
   } else {
@@ -202,17 +201,20 @@ export default function SiteVisit() {
   const [activeReport, setActiveReport] = useState(null);
   const [search, setSearch]             = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [personName, setPersonName]     = useState("");
-  const [fileName, setFileName]         = useState("");
+
+  /* ── Queue state ─────────────────────────────────────────────── */
+  const [entries, setEntries]           = useState([]); // [{id, name, file, fileName}]
+  const [queueName, setQueueName]       = useState("");
+  const [queueFileName, setQueueFileName] = useState("");
+  const queueFileRef = useRef(null);
+
   const [uploadMsg, setUploadMsg]       = useState(null);
   const [uploading, setUploading]       = useState(false);
-  const fileRef = useRef(null);
 
   /* ── Load masters on mount ──────────────────────────────────── */
   useEffect(() => { loadMasters(); }, []); // eslint-disable-line
 
   async function loadMasters() {
-    /* Serve from cache instantly */
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
@@ -224,7 +226,6 @@ export default function SiteVisit() {
       }
     } catch (_) {}
 
-    /* Refresh from files */
     try {
       const [panBuf, llBuf] = await Promise.all([
         fetch("/pan-india-master.xlsb").then((r) => {
@@ -268,263 +269,290 @@ export default function SiteVisit() {
     if (activeReport?.id === id) setActiveReport(null);
   }
 
-  /* ── Upload & match ─────────────────────────────────────────── */
-  async function handleSubmit(e) {
+  /* ── Add one entry to the queue ─────────────────────────────── */
+  function addToQueue(e) {
     e.preventDefault();
-    const file = fileRef.current?.files[0];
-    if (!file || !masterReady) return;
+    const file = queueFileRef.current?.files[0];
+    if (!file) return;
+    setEntries((prev) => [
+      ...prev,
+      { id: Date.now().toString() + Math.random(), name: queueName.trim(), file, fileName: file.name },
+    ]);
+    setQueueName("");
+    setQueueFileName("");
+    if (queueFileRef.current) queueFileRef.current.value = "";
+  }
+
+  function removeFromQueue(id) {
+    setEntries((prev) => prev.filter((e) => e.id !== id));
+  }
+
+  /* ── Process a single file, return rows ─────────────────────── */
+  async function processFile(manualName, file) {
+    const buf = await file.arrayBuffer();
+    const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
+
+    const gpsRe = /(\d{1,3}\.\d+)\s*,\s*(\d{1,3}\.\d+)/;
+    let ws = wb.Sheets[wb.SheetNames[0]];
+    for (const sheetName of wb.SheetNames) {
+      const sample = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
+        header: 1, defval: "",
+      }).slice(0, 60);
+      const found = sample.some((row) =>
+        row.some((cell) => {
+          const m = gpsRe.exec(String(cell || ""));
+          if (!m) return false;
+          const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+          return lat >= 6 && lat <= 38 && lng >= 60 && lng <= 100;
+        })
+      );
+      if (found) { ws = wb.Sheets[sheetName]; break; }
+    }
+
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+    if (rows.length < 2) throw new Error(`${file.name}: file has no data rows`);
+
+    const HDR_KW = ["lat","long","lng","gps","name","employee","person",
+                    "staff","date","time","id","site","status","tracker"];
+    let headerRowIdx = 0;
+    for (let r = 0; r < Math.min(rows.length, 8); r++) {
+      const cells    = rows[r].map((c) => String(c || "").trim().toLowerCase());
+      const nonEmpty = cells.filter(Boolean).length;
+      const hits     = cells.filter((c) => HDR_KW.some((k) => c.includes(k))).length;
+      if (nonEmpty >= 3 && hits >= 2) { headerRowIdx = r; break; }
+    }
+
+    const headers = rows[headerRowIdx].map((h) =>
+      String(h || "").trim().toLowerCase()
+    );
+    const ci = makeCi(headers);
+
+    const colTime    = ci("time (gmt", "time", "timestamp", "date");
+    const colTracker = ci("tracker_id", "tracker", "device");
+    const colPerson  = ci("full name", "employee name", "staff name", "person name",
+                          "person", "name", "employee", "user", "field", "engineer");
+    const colRemark  = ci("validated remark", "remark", "validated", "status", "attendance");
+
+    let colLat = ci("latitude", "lat");
+    let colLng = ci("longitude", "lon", "long", "lng");
+    let colCombined = -1;
+
+    if (colLat !== -1 && colLng !== -1 && colLat !== colLng) {
+      const samp = rows.slice(headerRowIdx + 1, headerRowIdx + 11);
+      const tLat = parseFloat(String(
+        samp.map((r) => r[colLat]).find((v) => String(v || "").trim()) || ""
+      ));
+      const tLng = parseFloat(String(
+        samp.map((r) => r[colLng]).find((v) => String(v || "").trim()) || ""
+      ));
+      if (isNaN(tLat) || isNaN(tLng) || tLat < 6 || tLat > 38 || tLng < 60 || tLng > 100) {
+        colLat = -1; colLng = -1;
+      }
+    } else {
+      colLat = -1; colLng = -1;
+    }
+
+    if (colLat === -1 || colLng === -1) {
+      const numCols  = rows[headerRowIdx]?.length || 0;
+      const scanEnd  = Math.min(rows.length, headerRowIdx + 200);
+      let best = 0;
+      for (let c = 0; c < numCols; c++) {
+        let count = 0;
+        for (let i = headerRowIdx + 1; i < scanEnd; i++)
+          if (rows[i] && extractCoords(rows[i][c]).length > 0) count++;
+        if (count > best) { best = count; colCombined = c; }
+      }
+    }
+
+    if (colLat === -1 && colLng === -1 && colCombined === -1) {
+      const preview = headers.slice(0, 8).filter(Boolean).join(" | ");
+      throw new Error(`${file.name}: no GPS columns found. Columns: ${preview || "(none)"}`);
+    }
+
+    const allData = rows.slice(headerRowIdx + 1)
+      .filter((r) => r.some((c) => String(c || "").trim()));
+    const nameSet = new Set();
+    if (colPerson !== -1)
+      allData.forEach((r) => {
+        const n = String(r[colPerson] || "").trim();
+        if (n) nameSet.add(n);
+      });
+    const isProductivity = nameSet.size > 1 && nameSet.size / allData.length >= 0.4;
+
+    const resultRows = [];
+    let matchedCount = 0;
+
+    if (isProductivity) {
+      for (let i = headerRowIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r.some((c) => String(c || "").trim())) continue;
+
+        const pName = (colPerson !== -1 ? String(r[colPerson] || "").trim() : "")
+          || manualName || "Unknown";
+        const fileStatus = colRemark !== -1 ? String(r[colRemark] || "").trim() : "";
+
+        let rowLat = null, rowLng = null;
+        if (colLat !== -1 && colLng !== -1) {
+          const la = parseFloat(r[colLat]), lo = parseFloat(r[colLng]);
+          if (!isNaN(la) && !isNaN(lo) && la && lo) { rowLat = la; rowLng = lo; }
+        } else if (colCombined !== -1) {
+          const coords = extractCoords(r[colCombined]);
+          if (coords.length) { rowLat = coords[0].lat; rowLng = coords[0].lng; }
+        }
+
+        let nearestSite = null, nearestDist = Infinity;
+        if (rowLat !== null) {
+          for (const site of masterSites) {
+            const d = haversineMeters(rowLat, rowLng, site.lat, site.lng);
+            if (d < nearestDist) { nearestDist = d; nearestSite = site; }
+          }
+        }
+
+        const verified = nearestDist <= TOLERANCE;
+        if (verified) matchedCount++;
+        const status = rowLat === null
+          ? (fileStatus || "No GPS")
+          : (verified ? "Work Done - Verified" : "Not at Master Site");
+
+        resultRows.push({
+          personName:      pName,
+          timeOfVisit:     "",
+          userLat:         rowLat,
+          userLng:         rowLng,
+          matchedSiteId:   nearestSite?.stsId   || "",
+          matchedSiteName: nearestSite?.name    || "",
+          district:        nearestSite?.dist    || "",
+          circle:          nearestSite?.circle  || "",
+          masterSource:    nearestSite?.source  || "",
+          masterLat:       nearestSite?.lat     ?? null,
+          masterLng:       nearestSite?.lng     ?? null,
+          distanceMeters:  nearestDist !== Infinity ? Math.round(nearestDist) : null,
+          matched:         verified,
+          status,
+        });
+      }
+
+    } else {
+      const pingsByPerson = new Map();
+      for (let i = headerRowIdx + 1; i < rows.length; i++) {
+        const r    = rows[i];
+        const time = colTime !== -1 ? String(r[colTime] || "") : "";
+        let rPerson = manualName;
+        if (!rPerson) {
+          if (colPerson !== -1 && String(r[colPerson] || "").trim())
+            rPerson = String(r[colPerson]).trim();
+          else if (colTracker !== -1 && String(r[colTracker] || "").trim()) {
+            const raw = String(r[colTracker]).trim();
+            rPerson = raw.includes("@") ? raw.split("@")[1] : raw;
+          }
+        }
+        if (!rPerson) rPerson = "Unknown";
+        if (!pingsByPerson.has(rPerson)) pingsByPerson.set(rPerson, []);
+        const bucket = pingsByPerson.get(rPerson);
+        if (colLat !== -1 && colLng !== -1) {
+          const lat = parseFloat(r[colLat]), lng = parseFloat(r[colLng]);
+          if (!lat || !lng || isNaN(lat) || isNaN(lng)) continue;
+          bucket.push({ lat, lng, time });
+        } else {
+          const coords = extractCoords(r[colCombined]);
+          if (!coords.length) continue;
+          for (const { lat, lng } of coords) bucket.push({ lat, lng, time });
+        }
+      }
+
+      const totalPings = [...pingsByPerson.values()].reduce((s, a) => s + a.length, 0);
+      if (!totalPings) throw new Error(`${file.name}: no valid GPS coordinates found`);
+
+      for (const [pName, pings] of pingsByPerson) {
+        for (const site of masterSites) {
+          let nearestDist = Infinity, nearestTime = "", nearestLat = null, nearestLng = null;
+          const degTol = TOLERANCE / 111000;
+          for (const ping of pings) {
+            if (Math.abs(ping.lat - site.lat) > degTol) continue;
+            if (Math.abs(ping.lng - site.lng) > degTol) continue;
+            const d = haversineMeters(ping.lat, ping.lng, site.lat, site.lng);
+            if (d < nearestDist) {
+              nearestDist = d; nearestTime = ping.time;
+              nearestLat = ping.lat; nearestLng = ping.lng;
+            }
+          }
+          if (nearestDist > TOLERANCE) continue;
+          matchedCount++;
+          resultRows.push({
+            personName:      pName,
+            timeOfVisit:     nearestTime,
+            userLat:         nearestLat,
+            userLng:         nearestLng,
+            matchedSiteId:   site.stsId,
+            matchedSiteName: site.name,
+            district:        site.dist,
+            circle:          site.circle,
+            masterSource:    site.source,
+            masterLat:       site.lat,
+            masterLng:       site.lng,
+            distanceMeters:  Math.round(nearestDist),
+            matched:         true,
+            status:          "Work Done - Verified",
+          });
+        }
+      }
+    }
+
+    return { resultRows, matchedCount };
+  }
+
+  /* ── Match all queued entries ───────────────────────────────── */
+  async function handleMatchAll() {
+    if (!entries.length || !masterReady || uploading) return;
     setUploading(true);
     setUploadMsg(null);
 
-    try {
-      const buf = await file.arrayBuffer();
-      const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
+    const allRows = [];
+    let totalMatched = 0;
 
-      /* Pick the sheet that has GPS data */
-      const gpsRe = /(\d{1,3}\.\d+)\s*,\s*(\d{1,3}\.\d+)/;
-      let ws = wb.Sheets[wb.SheetNames[0]];
-      for (const sheetName of wb.SheetNames) {
-        const sample = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
-          header: 1, defval: "",
-        }).slice(0, 60);
-        const found = sample.some((row) =>
-          row.some((cell) => {
-            const m = gpsRe.exec(String(cell || ""));
-            if (!m) return false;
-            const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
-            return lat >= 6 && lat <= 38 && lng >= 60 && lng <= 100;
-          })
-        );
-        if (found) { ws = wb.Sheets[sheetName]; break; }
+    for (const entry of entries) {
+      try {
+        const { resultRows, matchedCount } = await processFile(entry.name, entry.file);
+        allRows.push(...resultRows);
+        totalMatched += matchedCount;
+      } catch (err) {
+        setUploadMsg({ text: "Error: " + err.message, type: "error" });
+        setUploading(false);
+        return;
       }
-
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-      if (rows.length < 2) throw new Error("File has no data rows");
-
-      /* Auto-detect real header row */
-      const HDR_KW = ["lat","long","lng","gps","name","employee","person",
-                      "staff","date","time","id","site","status","tracker"];
-      let headerRowIdx = 0;
-      for (let r = 0; r < Math.min(rows.length, 8); r++) {
-        const cells    = rows[r].map((c) => String(c || "").trim().toLowerCase());
-        const nonEmpty = cells.filter(Boolean).length;
-        const hits     = cells.filter((c) => HDR_KW.some((k) => c.includes(k))).length;
-        if (nonEmpty >= 3 && hits >= 2) { headerRowIdx = r; break; }
-      }
-
-      const headers = rows[headerRowIdx].map((h) =>
-        String(h || "").trim().toLowerCase()
-      );
-      const ci = makeCi(headers);
-
-      const colTime    = ci("time (gmt", "time", "timestamp", "date");
-      const colTracker = ci("tracker_id", "tracker", "device");
-      const colPerson  = ci("full name", "employee name", "staff name", "person name",
-                            "person", "name", "employee", "user", "field", "engineer");
-      const colRemark  = ci("validated remark", "remark", "validated", "status", "attendance");
-
-      /* Detect coordinate columns */
-      let colLat = ci("latitude", "lat");
-      let colLng = ci("longitude", "lon", "long", "lng");
-      let colCombined = -1;
-
-      if (colLat !== -1 && colLng !== -1 && colLat !== colLng) {
-        const samp = rows.slice(headerRowIdx + 1, headerRowIdx + 11);
-        const tLat = parseFloat(String(
-          samp.map((r) => r[colLat]).find((v) => String(v || "").trim()) || ""
-        ));
-        const tLng = parseFloat(String(
-          samp.map((r) => r[colLng]).find((v) => String(v || "").trim()) || ""
-        ));
-        if (isNaN(tLat) || isNaN(tLng) || tLat < 6 || tLat > 38 || tLng < 60 || tLng > 100) {
-          colLat = -1; colLng = -1;
-        }
-      } else {
-        colLat = -1; colLng = -1;
-      }
-
-      if (colLat === -1 || colLng === -1) {
-        const numCols  = rows[headerRowIdx]?.length || 0;
-        const scanEnd  = Math.min(rows.length, headerRowIdx + 200);
-        let best = 0;
-        for (let c = 0; c < numCols; c++) {
-          let count = 0;
-          for (let i = headerRowIdx + 1; i < scanEnd; i++)
-            if (rows[i] && extractCoords(rows[i][c]).length > 0) count++;
-          if (count > best) { best = count; colCombined = c; }
-        }
-      }
-
-      if (colLat === -1 && colLng === -1 && colCombined === -1) {
-        const preview = headers.slice(0, 8).filter(Boolean).join(" | ");
-        throw new Error(`No GPS columns found. Columns detected: ${preview || "(none)"}`);
-      }
-
-      /* Detect mode: productivity report vs raw GPS tracker */
-      const allData = rows.slice(headerRowIdx + 1)
-        .filter((r) => r.some((c) => String(c || "").trim()));
-      const nameSet = new Set();
-      if (colPerson !== -1)
-        allData.forEach((r) => {
-          const n = String(r[colPerson] || "").trim();
-          if (n) nameSet.add(n);
-        });
-      const isProductivity = nameSet.size > 1 && nameSet.size / allData.length >= 0.4;
-
-      const manualName = personName.trim();
-      const resultRows = [];
-      let matchedCount = 0;
-
-      /* ── PRODUCTIVITY MODE ─────────────────────────────────── */
-      if (isProductivity) {
-        for (let i = headerRowIdx + 1; i < rows.length; i++) {
-          const r = rows[i];
-          if (!r.some((c) => String(c || "").trim())) continue;
-
-          const pName = (colPerson !== -1 ? String(r[colPerson] || "").trim() : "")
-            || manualName || "Unknown";
-          const fileStatus = colRemark !== -1 ? String(r[colRemark] || "").trim() : "";
-
-          let rowLat = null, rowLng = null;
-          if (colLat !== -1 && colLng !== -1) {
-            const la = parseFloat(r[colLat]), lo = parseFloat(r[colLng]);
-            if (!isNaN(la) && !isNaN(lo) && la && lo) { rowLat = la; rowLng = lo; }
-          } else if (colCombined !== -1) {
-            const coords = extractCoords(r[colCombined]);
-            if (coords.length) { rowLat = coords[0].lat; rowLng = coords[0].lng; }
-          }
-
-          let nearestSite = null, nearestDist = Infinity;
-          if (rowLat !== null) {
-            for (const site of masterSites) {
-              const d = haversineMeters(rowLat, rowLng, site.lat, site.lng);
-              if (d < nearestDist) { nearestDist = d; nearestSite = site; }
-            }
-          }
-
-          const verified = nearestDist <= TOLERANCE;
-          if (verified) matchedCount++;
-          const status = rowLat === null
-            ? (fileStatus || "No GPS")
-            : (verified ? "Work Done - Verified" : "Not at Master Site");
-
-          resultRows.push({
-            rowNumber:       resultRows.length + 1,
-            personName:      pName,
-            timeOfVisit:     "",
-            userLat:         rowLat,
-            userLng:         rowLng,
-            matchedSiteId:   nearestSite?.stsId   || "",
-            matchedSiteName: nearestSite?.name    || "",
-            district:        nearestSite?.dist    || "",
-            circle:          nearestSite?.circle  || "",
-            masterSource:    nearestSite?.source  || "",
-            masterLat:       nearestSite?.lat     ?? null,
-            masterLng:       nearestSite?.lng     ?? null,
-            distanceMeters:  nearestDist !== Infinity ? Math.round(nearestDist) : null,
-            matched:         verified,
-            status,
-          });
-        }
-
-      /* ── GPS TRACKER MODE ──────────────────────────────────── */
-      } else {
-        const pingsByPerson = new Map();
-        for (let i = headerRowIdx + 1; i < rows.length; i++) {
-          const r    = rows[i];
-          const time = colTime !== -1 ? String(r[colTime] || "") : "";
-          let rPerson = manualName;
-          if (!rPerson) {
-            if (colPerson !== -1 && String(r[colPerson] || "").trim())
-              rPerson = String(r[colPerson]).trim();
-            else if (colTracker !== -1 && String(r[colTracker] || "").trim()) {
-              const raw = String(r[colTracker]).trim();
-              rPerson = raw.includes("@") ? raw.split("@")[1] : raw;
-            }
-          }
-          if (!rPerson) rPerson = "Unknown";
-          if (!pingsByPerson.has(rPerson)) pingsByPerson.set(rPerson, []);
-          const bucket = pingsByPerson.get(rPerson);
-          if (colLat !== -1 && colLng !== -1) {
-            const lat = parseFloat(r[colLat]), lng = parseFloat(r[colLng]);
-            if (!lat || !lng || isNaN(lat) || isNaN(lng)) continue;
-            bucket.push({ lat, lng, time });
-          } else {
-            const coords = extractCoords(r[colCombined]);
-            if (!coords.length) continue;
-            for (const { lat, lng } of coords) bucket.push({ lat, lng, time });
-          }
-        }
-
-        const totalPings = [...pingsByPerson.values()].reduce((s, a) => s + a.length, 0);
-        if (!totalPings) throw new Error("No valid GPS coordinates found in the uploaded file");
-
-        for (const [pName, pings] of pingsByPerson) {
-          for (const site of masterSites) {
-            let nearestDist = Infinity, nearestTime = "", nearestLat = null, nearestLng = null;
-            const degTol = TOLERANCE / 111000;
-            for (const ping of pings) {
-              if (Math.abs(ping.lat - site.lat) > degTol) continue;
-              if (Math.abs(ping.lng - site.lng) > degTol) continue;
-              const d = haversineMeters(ping.lat, ping.lng, site.lat, site.lng);
-              if (d < nearestDist) {
-                nearestDist = d; nearestTime = ping.time;
-                nearestLat = ping.lat; nearestLng = ping.lng;
-              }
-            }
-            if (nearestDist > TOLERANCE) continue;
-            matchedCount++;
-            resultRows.push({
-              rowNumber:       matchedCount,
-              personName:      pName,
-              timeOfVisit:     nearestTime,
-              userLat:         nearestLat,
-              userLng:         nearestLng,
-              matchedSiteId:   site.stsId,
-              matchedSiteName: site.name,
-              district:        site.dist,
-              circle:          site.circle,
-              masterSource:    site.source,
-              masterLat:       site.lat,
-              masterLng:       site.lng,
-              distanceMeters:  Math.round(nearestDist),
-              matched:         true,
-              status:          "Work Done - Verified",
-            });
-          }
-        }
-      }
-
-      const label = isProductivity
-        ? `${nameSet.size} persons`
-        : (manualName || ([...new Set(resultRows.map((r) => r.personName))][0]) || "Unknown");
-
-      const report = {
-        id:           Date.now().toString(),
-        fileName:     file.name,
-        uploadedBy:   label,
-        createdAt:    new Date().toLocaleDateString("en-IN", {
-          day: "2-digit", month: "short", year: "numeric",
-          hour: "2-digit", minute: "2-digit",
-        }),
-        matchedCount,
-        totalRows:    resultRows.length,
-        rows:         resultRows,
-      };
-
-      const all = [report, ...reports].slice(0, 20);
-      persistReports(all);
-      setActiveReport(report);
-      setSearch(""); setStatusFilter("");
-      setUploadMsg({
-        text: `Done — ${resultRows.length} rows · ${matchedCount} Verified`,
-        type: "success",
-      });
-      if (fileRef.current) { fileRef.current.value = ""; setFileName(""); }
-
-    } catch (err) {
-      setUploadMsg({ text: "Error: " + err.message, type: "error" });
     }
+
+    /* Renumber combined rows */
+    allRows.forEach((r, i) => { r.rowNumber = i + 1; });
+
+    const names = [...new Set(
+      entries.map((e) => e.name).filter(Boolean).concat(
+        allRows.map((r) => r.personName).filter(Boolean)
+      )
+    )].slice(0, 5).join(", ");
+
+    const report = {
+      id:           Date.now().toString(),
+      fileName:     `Combined — ${entries.length} file${entries.length > 1 ? "s" : ""}`,
+      uploadedBy:   names || "Multiple persons",
+      createdAt:    new Date().toLocaleDateString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      }),
+      matchedCount: totalMatched,
+      totalRows:    allRows.length,
+      rows:         allRows,
+    };
+
+    const all = [report, ...reports].slice(0, 20);
+    persistReports(all);
+    setActiveReport(report);
+    setEntries([]);
+    setSearch(""); setStatusFilter("");
+    setUploadMsg({
+      text: `Done — ${allRows.length} rows across ${entries.length} files · ${totalMatched} Verified`,
+      type: "success",
+    });
     setUploading(false);
   }
 
@@ -552,7 +580,8 @@ export default function SiteVisit() {
     xlWs["!cols"] = [5, 22, 22, 28, 18, 14, 26, 26, 13, 18, 22].map((wch) => ({ wch }));
     const xlWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(xlWb, xlWs, "Verification");
-    XLSX.writeFile(xlWb, activeReport.fileName.replace(/\.[^.]+$/, "") + "_verified.xlsx");
+    const safeName = activeReport.fileName.replace(/[^a-zA-Z0-9_\- ]/g, "").trim() || "combined";
+    XLSX.writeFile(xlWb, safeName + "_verified.xlsx");
   }
 
   /* ── Filtered rows ──────────────────────────────────────────── */
@@ -656,7 +685,15 @@ export default function SiteVisit() {
       {/* ── Upload panel ─────────────────────────────────────── */}
       <div style={card}>
         <div style={cardHeader}>
-          <p style={cardTitle}>Upload GPS Report</p>
+          <p style={cardTitle}>Upload GPS Reports</p>
+          {entries.length > 0 && (
+            <span style={{
+              fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
+              background: T.blueBg, color: T.blue, border: "1px solid rgba(29,78,216,0.2)",
+            }}>
+              {entries.length} file{entries.length > 1 ? "s" : ""} queued
+            </span>
+          )}
         </div>
         <div style={{ padding: "16px 20px" }}>
           <div style={{
@@ -664,11 +701,11 @@ export default function SiteVisit() {
             background: T.grey100, borderLeft: `3px solid ${T.red}`,
             borderRadius: "0 6px 6px 0", padding: "8px 12px", marginBottom: 16,
           }}>
-            Upload a field person's GPS tracker or daily productivity report (.xlsx / .xls / .csv).
-            Each person's GPS is matched against master sites — <strong>verified if within 50 m</strong>.
+            Add each person's GPS file one by one, then click <strong>Match All</strong> to process together and download one combined Excel.
           </div>
 
-          <form onSubmit={handleSubmit} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+          {/* ── Add to queue form ──────────────────────────────── */}
+          <form onSubmit={addToQueue} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
             {/* Person name */}
             <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 180 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
@@ -676,8 +713,8 @@ export default function SiteVisit() {
               </label>
               <input
                 type="text"
-                value={personName}
-                onChange={(e) => setPersonName(e.target.value)}
+                value={queueName}
+                onChange={(e) => setQueueName(e.target.value)}
                 placeholder="Optional — auto-detected"
                 style={{
                   padding: "8px 11px", border: `1px solid ${T.border}`,
@@ -703,34 +740,99 @@ export default function SiteVisit() {
                 fontSize: 13, fontWeight: 500,
               }}>
                 <Upload size={15} />
-                <span>{fileName || "Choose file…"}</span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {queueFileName || "Choose file…"}
+                </span>
                 <input
-                  ref={fileRef}
+                  ref={queueFileRef}
                   type="file"
                   accept=".xlsx,.xls,.csv"
                   required
                   style={{ display: "none" }}
-                  onChange={(e) => setFileName(e.target.files[0]?.name || "")}
+                  onChange={(e) => setQueueFileName(e.target.files[0]?.name || "")}
                 />
               </label>
             </div>
 
-            {/* Submit */}
+            {/* Add button */}
             <button
               type="submit"
-              disabled={uploading || !masterReady}
               style={{
                 padding: "9px 18px",
-                background: uploading || !masterReady ? "#ccc" : T.red,
-                color: T.white, border: "none", borderRadius: 8,
+                background: T.red, color: T.white,
+                border: "none", borderRadius: 8,
                 fontSize: 13, fontWeight: 700, fontFamily: "inherit",
-                cursor: uploading || !masterReady ? "not-allowed" : "pointer",
-                whiteSpace: "nowrap",
+                cursor: "pointer", whiteSpace: "nowrap",
+                display: "inline-flex", alignItems: "center", gap: 6,
               }}
             >
-              {uploading ? "Processing…" : "Upload & Match"}
+              <Plus size={15} /> Add to Queue
             </button>
           </form>
+
+          {/* ── Queue list ────────────────────────────────────── */}
+          {entries.length > 0 && (
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              {entries.map((entry, idx) => (
+                <div key={entry.id} style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "10px 14px",
+                  background: T.grey100,
+                  border: `1px solid ${T.border}`,
+                  borderRadius: 8,
+                }}>
+                  <span style={{
+                    width: 22, height: 22, borderRadius: "50%",
+                    background: T.red, color: T.white,
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 11, fontWeight: 700, flexShrink: 0,
+                  }}>{idx + 1}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: T.black }}>
+                      {entry.name || <span style={{ color: T.grey500, fontStyle: "italic" }}>Name auto-detect</span>}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {entry.fileName}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => removeFromQueue(entry.id)}
+                    style={{
+                      width: 28, height: 28, borderRadius: 6,
+                      border: `1px solid ${T.border}`, background: "transparent",
+                      color: T.grey500, cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      flexShrink: 0,
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.background = T.redLight; e.currentTarget.style.color = T.red; e.currentTarget.style.borderColor = T.red; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.grey500; e.currentTarget.style.borderColor = T.border; }}
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))}
+
+              {/* Match All button */}
+              <button
+                onClick={handleMatchAll}
+                disabled={uploading || !masterReady}
+                style={{
+                  marginTop: 4,
+                  padding: "10px 20px",
+                  background: uploading || !masterReady ? "#ccc" : T.green,
+                  color: T.white, border: "none", borderRadius: 8,
+                  fontSize: 13.5, fontWeight: 700, fontFamily: "inherit",
+                  cursor: uploading || !masterReady ? "not-allowed" : "pointer",
+                  whiteSpace: "nowrap", alignSelf: "flex-start",
+                  display: "inline-flex", alignItems: "center", gap: 7,
+                }}
+              >
+                {uploading
+                  ? "Processing…"
+                  : `Upload & Match All (${entries.length} file${entries.length > 1 ? "s" : ""})`}
+              </button>
+            </div>
+          )}
 
           {uploadMsg && (
             <div style={{
@@ -768,7 +870,7 @@ export default function SiteVisit() {
         </div>
         {reports.length === 0 ? (
           <div style={{ textAlign: "center", padding: 40, color: T.grey500, fontSize: 13 }}>
-            No uploads yet. Upload a GPS report to begin.
+            No uploads yet. Upload GPS reports to begin.
           </div>
         ) : (
           reports.slice(0, 5).map((r) => (
@@ -788,7 +890,7 @@ export default function SiteVisit() {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13.5, color: T.black }}>{r.fileName}</div>
                 <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 2 }}>
-                  By {r.uploadedBy} · {r.createdAt} · {r.totalRows} rows
+                  {r.uploadedBy} · {r.createdAt} · {r.totalRows} rows
                 </div>
               </div>
               <span style={{
