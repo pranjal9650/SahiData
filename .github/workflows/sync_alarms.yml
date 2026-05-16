@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests pymysql sshtunnel
+        run: pip install requests pymysql sshtunnel "paramiko==2.12.0"
 
       - name: Run sync script
         env:
