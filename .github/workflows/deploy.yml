@@ -1,0 +1,22 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Mumbai EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 13.234.240.241
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/SahiData
+            git pull origin master
+            sudo systemctl restart sahi-backend
+            echo "Deploy complete"
