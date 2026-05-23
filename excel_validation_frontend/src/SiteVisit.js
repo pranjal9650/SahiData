@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import * as XLSX from "xlsx";
 import {
   Upload, Search, Download, Trash2, MapPin,
   CheckCircle, XCircle, Clock, Navigation2, Plus, X, FolderOpen,
 } from "lucide-react";
 
-/* ── Design tokens (match App.js) ─────────────────────────────── */
+/* ── Design tokens ────────────────────────────────────────────── */
 const T = {
   red:      "#CC0000",
   redDark:  "#A30000",
@@ -24,7 +24,7 @@ const T = {
   blueBg:   "rgba(29,78,216,0.07)",
 };
 
-const TOLERANCE = 50; // metres
+const TOLERANCE  = 50;
 const STORAGE_KEY = "siteVisitReports";
 const CACHE_KEY   = "siteVisitMasterCache";
 
@@ -80,9 +80,9 @@ function parsePanIndia(ws) {
   const headers = rows[2].map((h) =>
     String(h || "").trim().toLowerCase().replace(/\r?\n/g, " ")
   );
-  const ci = makeCi(headers);
+  const ci  = makeCi(headers);
   const iId   = ci("stpl site id", "site id");
-  const iName = ci("site name");
+  const iName = ci("site name", "sitename", "site_name", "name");
   const iCirc = ci("circle name", "circle");
   const iDist = ci("district");
   const iLat  = ci("latitude");
@@ -112,13 +112,13 @@ function parseLLSheet(ws, map) {
   const headers = rows[0].map((h) =>
     String(h || "").trim().toLowerCase().replace(/\r?\n/g, " ")
   );
-  const ci   = makeCi(headers);
-  const iId  = ci("sts site id", "stpl site id", "site id");
-  const iName = ci("site name");
+  const ci    = makeCi(headers);
+  const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid");
+  const iName = ci("site name", "sitename", "site_name", "name");
   const iCirc = ci("circle name", "circle");
   const iDist = ci("district");
   const iLat  = ci("lat", "latitude");
-  const iLng  = ci("long", "longitude");
+  const iLng  = ci("lng", "long", "longitude", "longtitude");
   if (iId === -1 || iLat === -1 || iLng === -1) return;
   for (let i = 1; i < rows.length; i++) {
     const r   = rows[i];
@@ -192,82 +192,102 @@ function fmtTime(val) {
 /*  Main Component                                                 */
 /* ═══════════════════════════════════════════════════════════════ */
 export default function SiteVisit() {
-  const [masterSites, setMasterSites]     = useState([]);
-  const [masterLabel, setMasterLabel]     = useState("No master file uploaded");
-  const [masterReady, setMasterReady]     = useState(false);
-  const [masterFileName, setMasterFileName] = useState("");
+
+  /* ── Master files state ──────────────────────────────────────── */
+  // Each entry: { id, name, sites: [{stsId, name, circle, dist, lat, lng, source}] }
+  const [masterFiles, setMasterFiles]   = useState([]);
   const [masterParsing, setMasterParsing] = useState(false);
+  const [masterError, setMasterError]   = useState("");
   const masterFileRef = useRef(null);
 
-  const [reports, setReports]             = useState(() =>
+  // Merged master sites — derived from all uploaded master files
+  const masterSites = useMemo(() => {
+    const map = new Map();
+    for (const mf of masterFiles) {
+      for (const site of mf.sites) {
+        const key = (site.stsId || "").toUpperCase();
+        if (key && !map.has(key)) map.set(key, site);
+      }
+    }
+    return [...map.values()];
+  }, [masterFiles]);
+
+  const masterReady = masterSites.length > 0;
+
+  /* ── Reports / queue state ───────────────────────────────────── */
+  const [reports, setReports]           = useState(() =>
     JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
   );
-  const [activeReport, setActiveReport]   = useState(null);
-  const [search, setSearch]               = useState("");
-  const [statusFilter, setStatusFilter]   = useState("");
-
-  /* ── Queue state ─────────────────────────────────────────────── */
-  const [entries, setEntries]             = useState([]);
-  const [queueName, setQueueName]         = useState("");
+  const [activeReport, setActiveReport] = useState(null);
+  const [search, setSearch]             = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [entries, setEntries]           = useState([]);
+  const [queueName, setQueueName]       = useState("");
   const [queueFileName, setQueueFileName] = useState("");
   const queueFileRef = useRef(null);
+  const [uploadMsg, setUploadMsg]       = useState(null);
+  const [uploading, setUploading]       = useState(false);
 
-  const [uploadMsg, setUploadMsg]         = useState(null);
-  const [uploading, setUploading]         = useState(false);
-
-  /* ── Load cached master on mount ────────────────────────────── */
+  /* ── Load cached master files on mount ──────────────────────── */
   useEffect(() => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
-        const { pan, ll, fileName } = JSON.parse(cached);
-        const sites = buildMergedArray(new Map(pan), new Map(ll));
-        if (sites.length) {
-          setMasterSites(sites);
-          setMasterFileName(fileName || "cached master");
-          setMasterLabel(`✔ ${sites.length} Sites Loaded`);
-          setMasterReady(true);
+        const parsed = JSON.parse(cached);
+        if (parsed.masterFiles?.length) {
+          setMasterFiles(parsed.masterFiles);
+        } else if (parsed.pan && parsed.ll) {
+          // Migrate old cache format
+          const sites = buildMergedArray(new Map(parsed.pan), new Map(parsed.ll));
+          if (sites.length)
+            setMasterFiles([{ id: "cached", name: parsed.fileName || "Cached master", sites }]);
         }
       }
     } catch (_) {}
   }, []);
 
-  /* ── Upload & parse master file ─────────────────────────────── */
+  /* ── Persist master files to cache whenever they change ─────── */
+  useEffect(() => {
+    if (masterFiles.length)
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ masterFiles }));
+  }, [masterFiles]);
+
+  /* ── Upload & parse one master file ─────────────────────────── */
   async function handleMasterUpload(file) {
     if (!file) return;
     setMasterParsing(true);
-    setMasterReady(false);
-    setMasterLabel("Parsing master file…");
+    setMasterError("");
     try {
       const buf = await file.arrayBuffer();
       const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
-
       const panMap = wb.Sheets["Site master"]
         ? parsePanIndia(wb.Sheets["Site master"])
         : new Map();
       const llMap  = parseSiteLatLong(wb);
       const sites  = buildMergedArray(panMap, llMap);
-
       if (!sites.length)
         throw new Error("No sites with lat/long coordinates found in this file");
-
-      setMasterSites(sites);
-      setMasterFileName(file.name);
-      setMasterLabel(`✔ ${sites.length} Sites Loaded`);
-      setMasterReady(true);
-      localStorage.setItem(CACHE_KEY, JSON.stringify({
-        pan:      [...panMap.entries()],
-        ll:       [...llMap.entries()],
-        fileName: file.name,
-      }));
+      setMasterFiles((prev) => [
+        ...prev,
+        { id: Date.now().toString(), name: file.name, sites },
+      ]);
     } catch (err) {
-      setMasterLabel("⚠ " + err.message);
-      setMasterReady(false);
+      setMasterError(err.message);
     }
     setMasterParsing(false);
+    if (masterFileRef.current) masterFileRef.current.value = "";
   }
 
-  /* ── Persist reports ────────────────────────────────────────── */
+  function removeMasterFile(id) {
+    setMasterFiles((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  function clearAllMasters() {
+    setMasterFiles([]);
+    localStorage.removeItem(CACHE_KEY);
+  }
+
+  /* ── Persist reports ─────────────────────────────────────────── */
   function persistReports(list) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
     setReports(list);
@@ -281,7 +301,7 @@ export default function SiteVisit() {
     if (activeReport?.id === id) setActiveReport(null);
   }
 
-  /* ── Add one entry to the queue ─────────────────────────────── */
+  /* ── Queue management ────────────────────────────────────────── */
   function addToQueue(e) {
     e.preventDefault();
     const file = queueFileRef.current?.files[0];
@@ -299,7 +319,7 @@ export default function SiteVisit() {
     setEntries((prev) => prev.filter((e) => e.id !== id));
   }
 
-  /* ── Process a single file, return rows ─────────────────────── */
+  /* ── Process one GPS file ────────────────────────────────────── */
   async function processFile(manualName, file) {
     const buf = await file.arrayBuffer();
     const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
@@ -307,9 +327,7 @@ export default function SiteVisit() {
     const gpsRe = /(\d{1,3}\.\d+)\s*,\s*(\d{1,3}\.\d+)/;
     let ws = wb.Sheets[wb.SheetNames[0]];
     for (const sheetName of wb.SheetNames) {
-      const sample = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], {
-        header: 1, defval: "",
-      }).slice(0, 60);
+      const sample = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, defval: "" }).slice(0, 60);
       const found = sample.some((row) =>
         row.some((cell) => {
           const m = gpsRe.exec(String(cell || ""));
@@ -334,9 +352,7 @@ export default function SiteVisit() {
       if (nonEmpty >= 3 && hits >= 2) { headerRowIdx = r; break; }
     }
 
-    const headers = rows[headerRowIdx].map((h) =>
-      String(h || "").trim().toLowerCase()
-    );
+    const headers = rows[headerRowIdx].map((h) => String(h || "").trim().toLowerCase());
     const ci = makeCi(headers);
 
     const colTime    = ci("time (gmt", "time", "timestamp", "date");
@@ -351,22 +367,15 @@ export default function SiteVisit() {
 
     if (colLat !== -1 && colLng !== -1 && colLat !== colLng) {
       const samp = rows.slice(headerRowIdx + 1, headerRowIdx + 11);
-      const tLat = parseFloat(String(
-        samp.map((r) => r[colLat]).find((v) => String(v || "").trim()) || ""
-      ));
-      const tLng = parseFloat(String(
-        samp.map((r) => r[colLng]).find((v) => String(v || "").trim()) || ""
-      ));
-      if (isNaN(tLat) || isNaN(tLng) || tLat < 6 || tLat > 38 || tLng < 60 || tLng > 100) {
-        colLat = -1; colLng = -1;
-      }
-    } else {
-      colLat = -1; colLng = -1;
-    }
+      const tLat = parseFloat(String(samp.map((r) => r[colLat]).find((v) => String(v || "").trim()) || ""));
+      const tLng = parseFloat(String(samp.map((r) => r[colLng]).find((v) => String(v || "").trim()) || ""));
+      if (isNaN(tLat) || isNaN(tLng) || tLat < 6 || tLat > 38 || tLng < 60 || tLng > 100)
+        colLat = colLng = -1;
+    } else { colLat = colLng = -1; }
 
     if (colLat === -1 || colLng === -1) {
-      const numCols  = rows[headerRowIdx]?.length || 0;
-      const scanEnd  = Math.min(rows.length, headerRowIdx + 200);
+      const numCols = rows[headerRowIdx]?.length || 0;
+      const scanEnd = Math.min(rows.length, headerRowIdx + 200);
       let best = 0;
       for (let c = 0; c < numCols; c++) {
         let count = 0;
@@ -381,14 +390,9 @@ export default function SiteVisit() {
       throw new Error(`${file.name}: no GPS columns found. Columns: ${preview || "(none)"}`);
     }
 
-    const allData = rows.slice(headerRowIdx + 1)
-      .filter((r) => r.some((c) => String(c || "").trim()));
+    const allData = rows.slice(headerRowIdx + 1).filter((r) => r.some((c) => String(c || "").trim()));
     const nameSet = new Set();
-    if (colPerson !== -1)
-      allData.forEach((r) => {
-        const n = String(r[colPerson] || "").trim();
-        if (n) nameSet.add(n);
-      });
+    if (colPerson !== -1) allData.forEach((r) => { const n = String(r[colPerson] || "").trim(); if (n) nameSet.add(n); });
     const isProductivity = nameSet.size > 1 && nameSet.size / allData.length >= 0.4;
 
     const resultRows = [];
@@ -398,11 +402,8 @@ export default function SiteVisit() {
       for (let i = headerRowIdx + 1; i < rows.length; i++) {
         const r = rows[i];
         if (!r.some((c) => String(c || "").trim())) continue;
-
-        const pName = (colPerson !== -1 ? String(r[colPerson] || "").trim() : "")
-          || manualName || "Unknown";
+        const pName = (colPerson !== -1 ? String(r[colPerson] || "").trim() : "") || manualName || "Unknown";
         const fileStatus = colRemark !== -1 ? String(r[colRemark] || "").trim() : "";
-
         let rowLat = null, rowLng = null;
         if (colLat !== -1 && colLng !== -1) {
           const la = parseFloat(r[colLat]), lo = parseFloat(r[colLng]);
@@ -411,7 +412,6 @@ export default function SiteVisit() {
           const coords = extractCoords(r[colCombined]);
           if (coords.length) { rowLat = coords[0].lat; rowLng = coords[0].lng; }
         }
-
         let nearestSite = null, nearestDist = Infinity;
         if (rowLat !== null) {
           for (const site of masterSites) {
@@ -419,13 +419,8 @@ export default function SiteVisit() {
             if (d < nearestDist) { nearestDist = d; nearestSite = site; }
           }
         }
-
         const verified = nearestDist <= TOLERANCE;
         if (verified) matchedCount++;
-        const status = rowLat === null
-          ? (fileStatus || "No GPS")
-          : (verified ? "Work Done - Verified" : "Not at Master Site");
-
         resultRows.push({
           personName:      pName,
           timeOfVisit:     "",
@@ -440,10 +435,9 @@ export default function SiteVisit() {
           masterLng:       nearestSite?.lng     ?? null,
           distanceMeters:  nearestDist !== Infinity ? Math.round(nearestDist) : null,
           matched:         verified,
-          status,
+          status:          rowLat === null ? (fileStatus || "No GPS") : (verified ? "Work Done - Verified" : "Not at Master Site"),
         });
       }
-
     } else {
       const pingsByPerson = new Map();
       for (let i = headerRowIdx + 1; i < rows.length; i++) {
@@ -451,8 +445,7 @@ export default function SiteVisit() {
         const time = colTime !== -1 ? String(r[colTime] || "") : "";
         let rPerson = manualName;
         if (!rPerson) {
-          if (colPerson !== -1 && String(r[colPerson] || "").trim())
-            rPerson = String(r[colPerson]).trim();
+          if (colPerson !== -1 && String(r[colPerson] || "").trim()) rPerson = String(r[colPerson]).trim();
           else if (colTracker !== -1 && String(r[colTracker] || "").trim()) {
             const raw = String(r[colTracker]).trim();
             rPerson = raw.includes("@") ? raw.split("@")[1] : raw;
@@ -471,10 +464,8 @@ export default function SiteVisit() {
           for (const { lat, lng } of coords) bucket.push({ lat, lng, time });
         }
       }
-
       const totalPings = [...pingsByPerson.values()].reduce((s, a) => s + a.length, 0);
       if (!totalPings) throw new Error(`${file.name}: no valid GPS coordinates found`);
-
       for (const [pName, pings] of pingsByPerson) {
         for (const site of masterSites) {
           let nearestDist = Infinity, nearestTime = "", nearestLat = null, nearestLng = null;
@@ -483,45 +474,32 @@ export default function SiteVisit() {
             if (Math.abs(ping.lat - site.lat) > degTol) continue;
             if (Math.abs(ping.lng - site.lng) > degTol) continue;
             const d = haversineMeters(ping.lat, ping.lng, site.lat, site.lng);
-            if (d < nearestDist) {
-              nearestDist = d; nearestTime = ping.time;
-              nearestLat = ping.lat; nearestLng = ping.lng;
-            }
+            if (d < nearestDist) { nearestDist = d; nearestTime = ping.time; nearestLat = ping.lat; nearestLng = ping.lng; }
           }
           if (nearestDist > TOLERANCE) continue;
           matchedCount++;
           resultRows.push({
-            personName:      pName,
-            timeOfVisit:     nearestTime,
-            userLat:         nearestLat,
-            userLng:         nearestLng,
-            matchedSiteId:   site.stsId,
-            matchedSiteName: site.name,
-            district:        site.dist,
-            circle:          site.circle,
-            masterSource:    site.source,
-            masterLat:       site.lat,
-            masterLng:       site.lng,
-            distanceMeters:  Math.round(nearestDist),
-            matched:         true,
-            status:          "Work Done - Verified",
+            personName: pName, timeOfVisit: nearestTime,
+            userLat: nearestLat, userLng: nearestLng,
+            matchedSiteId: site.stsId, matchedSiteName: site.name,
+            district: site.dist, circle: site.circle, masterSource: site.source,
+            masterLat: site.lat, masterLng: site.lng,
+            distanceMeters: Math.round(nearestDist), matched: true,
+            status: "Work Done - Verified",
           });
         }
       }
     }
-
     return { resultRows, matchedCount };
   }
 
-  /* ── Match all queued entries ───────────────────────────────── */
+  /* ── Match all queued entries ────────────────────────────────── */
   async function handleMatchAll() {
     if (!entries.length || !masterReady || uploading) return;
     setUploading(true);
     setUploadMsg(null);
-
     const allRows = [];
     let totalMatched = 0;
-
     for (const entry of entries) {
       try {
         const { resultRows, matchedCount } = await processFile(entry.name, entry.file);
@@ -533,426 +511,232 @@ export default function SiteVisit() {
         return;
       }
     }
-
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
-
     const names = [...new Set(
-      entries.map((e) => e.name).filter(Boolean).concat(
-        allRows.map((r) => r.personName).filter(Boolean)
-      )
+      entries.map((e) => e.name).filter(Boolean).concat(allRows.map((r) => r.personName).filter(Boolean))
     )].slice(0, 5).join(", ");
-
     const report = {
       id:           Date.now().toString(),
       fileName:     `Combined — ${entries.length} file${entries.length > 1 ? "s" : ""}`,
       uploadedBy:   names || "Multiple persons",
-      createdAt:    new Date().toLocaleDateString("en-IN", {
-        day: "2-digit", month: "short", year: "numeric",
-        hour: "2-digit", minute: "2-digit",
-      }),
+      createdAt:    new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
       matchedCount: totalMatched,
       totalRows:    allRows.length,
       rows:         allRows,
     };
-
     const all = [report, ...reports].slice(0, 20);
     persistReports(all);
     setActiveReport(report);
     setEntries([]);
     setSearch(""); setStatusFilter("");
-    setUploadMsg({
-      text: `Done — ${allRows.length} rows across ${entries.length} files · ${totalMatched} Verified`,
-      type: "success",
-    });
+    setUploadMsg({ text: `Done — ${allRows.length} rows across ${entries.length} files · ${totalMatched} Verified`, type: "success" });
     setUploading(false);
   }
 
-  /* ── Download Excel ─────────────────────────────────────────── */
+  /* ── Download Excel ──────────────────────────────────────────── */
   function downloadExcel() {
     if (!activeReport) return;
     const hdrs = ["#","Person Name","Site ID","Site Name","District","Circle",
                   "Person GPS","Master GPS","Gap to Site","Time","Status"];
     const data = activeReport.rows.map((r) => [
-      r.rowNumber,
-      r.personName,
-      r.matchedSiteId     || "",
-      r.matchedSiteName   || "",
-      r.district          || "",
-      r.circle            || "",
+      r.rowNumber, r.personName,
+      r.matchedSiteId || "", r.matchedSiteName || "", r.district || "", r.circle || "",
       r.userLat   != null ? `${r.userLat.toFixed(6)}, ${r.userLng.toFixed(6)}`     : "",
       r.masterLat != null ? `${r.masterLat.toFixed(6)}, ${r.masterLng.toFixed(6)}` : "",
-      r.distanceMeters != null
-        ? (r.distanceMeters < 1000 ? r.distanceMeters + " m" : (r.distanceMeters / 1000).toFixed(1) + " km")
-        : "",
-      fmtTime(r.timeOfVisit),
-      r.status      || "",
+      r.distanceMeters != null ? (r.distanceMeters < 1000 ? r.distanceMeters + " m" : (r.distanceMeters / 1000).toFixed(1) + " km") : "",
+      fmtTime(r.timeOfVisit), r.status || "",
     ]);
     const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-    xlWs["!cols"] = [5, 22, 22, 28, 18, 14, 26, 26, 13, 18, 22].map((wch) => ({ wch }));
+    xlWs["!cols"] = [5,22,22,28,18,14,26,26,13,18,22].map((wch) => ({ wch }));
     const xlWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(xlWb, xlWs, "Verification");
     const safeName = activeReport.fileName.replace(/[^a-zA-Z0-9_\- ]/g, "").trim() || "combined";
     XLSX.writeFile(xlWb, safeName + "_verified.xlsx");
   }
 
-  /* ── Filtered rows ──────────────────────────────────────────── */
+  /* ── Filtered rows ───────────────────────────────────────────── */
   const displayRows = activeReport
     ? activeReport.rows.filter((r) => {
         const hay = `${r.personName} ${r.matchedSiteId} ${r.matchedSiteName} ${r.district} ${r.circle}`.toLowerCase();
-        return (
-          (!search || hay.includes(search.toLowerCase())) &&
-          (!statusFilter || r.status === statusFilter)
-        );
+        return (!search || hay.includes(search.toLowerCase())) &&
+               (!statusFilter || r.status === statusFilter);
       })
     : [];
 
-  /* ── Status pill ────────────────────────────────────────────── */
+  /* ── Status pill ─────────────────────────────────────────────── */
   function StatusPill({ status }) {
     if (status === "Work Done - Verified")
-      return (
-        <span style={{
-          display: "inline-flex", alignItems: "center", gap: 4,
-          padding: "3px 10px", borderRadius: 99,
-          background: T.greenBg, color: T.green,
-          border: "1px solid rgba(21,128,61,0.2)",
-          fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap",
-        }}>
-          <CheckCircle size={11} /> Verified
-        </span>
-      );
+      return <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)",fontSize:11.5,fontWeight:600,whiteSpace:"nowrap" }}><CheckCircle size={11}/> Verified</span>;
     if (status === "Not at Master Site")
-      return (
-        <span style={{
-          display: "inline-flex", alignItems: "center", gap: 4,
-          padding: "3px 10px", borderRadius: 99,
-          background: T.orangeBg, color: T.orange,
-          border: "1px solid rgba(194,65,12,0.2)",
-          fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap",
-        }}>
-          <XCircle size={11} /> Not at Site
-        </span>
-      );
-    return (
-      <span style={{
-        display: "inline-flex", alignItems: "center", gap: 4,
-        padding: "3px 10px", borderRadius: 99,
-        background: "#f3f4f6", color: "#4b5563",
-        border: "1px solid #e5e7eb",
-        fontSize: 11.5, fontWeight: 600, whiteSpace: "nowrap",
-      }}>
-        <Clock size={11} /> {status}
-      </span>
-    );
+      return <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:99,background:T.orangeBg,color:T.orange,border:"1px solid rgba(194,65,12,0.2)",fontSize:11.5,fontWeight:600,whiteSpace:"nowrap" }}><XCircle size={11}/> Not at Site</span>;
+    return <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:99,background:"#f3f4f6",color:"#4b5563",border:"1px solid #e5e7eb",fontSize:11.5,fontWeight:600,whiteSpace:"nowrap" }}><Clock size={11}/> {status}</span>;
   }
 
-  /* ── Render ─────────────────────────────────────────────────── */
-  const card = {
-    background: T.white,
-    border: `1px solid ${T.border}`,
-    borderRadius: 12,
-    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
-    overflow: "hidden",
-  };
-  const cardHeader = {
-    padding: "14px 20px",
-    borderBottom: `1px solid ${T.border}`,
-    display: "flex", alignItems: "center", justifyContent: "space-between",
-  };
-  const cardTitle = { margin: 0, fontSize: 14, fontWeight: 700, color: T.black };
+  /* ── Shared styles ───────────────────────────────────────────── */
+  const card = { background:T.white, border:`1px solid ${T.border}`, borderRadius:12, boxShadow:"0 1px 4px rgba(0,0,0,0.06)", overflow:"hidden" };
+  const cardHeader = { padding:"14px 20px", borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", justifyContent:"space-between" };
+  const cardTitle  = { margin:0, fontSize:14, fontWeight:700, color:T.black };
 
+  /* ── Render ──────────────────────────────────────────────────── */
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 20, fontFamily: "'DM Sans', sans-serif" }}>
+    <div style={{ display:"flex", flexDirection:"column", gap:20, fontFamily:"'DM Sans', sans-serif" }}>
 
-      {/* ── Page header ──────────────────────────────────────── */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div style={{
-            width: 38, height: 38, borderRadius: 10,
-            background: T.redLight, border: "1px solid rgba(204,0,0,0.15)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-          }}>
-            <Navigation2 size={18} color={T.red} />
-          </div>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: T.black, letterSpacing: "-0.4px" }}>
-              User Site Visit
-            </h1>
-            <p style={{ margin: 0, fontSize: 12, color: T.grey500, marginTop: 2 }}>
-              Upload a master site file, then match employee GPS against it (50 m radius)
-            </p>
-          </div>
+      {/* Page header */}
+      <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+        <div style={{ width:38,height:38,borderRadius:10,background:T.redLight,border:"1px solid rgba(204,0,0,0.15)",display:"flex",alignItems:"center",justifyContent:"center" }}>
+          <Navigation2 size={18} color={T.red}/>
+        </div>
+        <div>
+          <h1 style={{ margin:0,fontSize:20,fontWeight:800,color:T.black,letterSpacing:"-0.4px" }}>User Site Visit</h1>
+          <p style={{ margin:0,fontSize:12,color:T.grey500,marginTop:2 }}>Upload master site file(s), then match employee GPS against them (50 m radius)</p>
         </div>
       </div>
 
-      {/* ── Step 1: Master file ───────────────────────────────── */}
+      {/* ── Step 1: Master files ─────────────────────────────────── */}
       <div style={card}>
         <div style={cardHeader}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{
-              width: 22, height: 22, borderRadius: "50%",
-              background: T.red, color: T.white,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              fontSize: 11, fontWeight: 700, flexShrink: 0,
-            }}>1</span>
-            <p style={cardTitle}>Upload Master Site File</p>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:T.red,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>1</span>
+            <p style={cardTitle}>Upload Master Site File(s)</p>
           </div>
-          {masterReady && (
-            <span style={{
-              fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
-              background: T.greenBg, color: T.green,
-              border: "1px solid rgba(21,128,61,0.2)",
-            }}>
-              ✔ {masterSites.length} Sites Loaded
-            </span>
-          )}
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {masterReady && (
+              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)" }}>
+                ✔ {masterSites.length} total sites from {masterFiles.length} file{masterFiles.length > 1 ? "s" : ""}
+              </span>
+            )}
+            {masterFiles.length > 0 && (
+              <button onClick={clearAllMasters} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
+                Clear All
+              </button>
+            )}
+          </div>
         </div>
-        <div style={{ padding: "16px 20px" }}>
-          <div style={{
-            fontSize: 12, color: T.grey500,
-            background: T.grey100, borderLeft: `3px solid ${T.blue}`,
-            borderRadius: "0 6px 6px 0", padding: "8px 12px", marginBottom: 14,
-          }}>
-            Upload your master Excel file containing <strong>Site ID, Latitude and Longitude</strong> columns.
-            This file will be used to match employee GPS locations against.
+        <div style={{ padding:"16px 20px" }}>
+          <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.blue}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:14 }}>
+            Upload one or more master Excel files with <strong>Site ID, Latitude and Longitude</strong> columns.
+            Sites are merged across all files — duplicates are skipped automatically.
           </div>
 
-          <label style={{
-            display: "flex", alignItems: "center", gap: 10,
-            padding: "12px 16px",
-            border: `2px dashed ${masterReady ? T.green : T.border}`,
-            borderRadius: 10, cursor: "pointer",
-            background: masterReady ? T.greenBg : "#fafafa",
-            transition: "all 0.15s",
-          }}
-            onMouseEnter={(e) => { if (!masterReady) e.currentTarget.style.borderColor = T.red; }}
-            onMouseLeave={(e) => { if (!masterReady) e.currentTarget.style.borderColor = T.border; }}
-          >
-            <FolderOpen size={20} color={masterReady ? T.green : T.grey500} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {masterParsing ? (
-                <span style={{ fontSize: 13, color: T.grey500 }}>Parsing file…</span>
-              ) : masterReady ? (
-                <>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: T.green }}>
-                    {masterFileName}
+          {/* Uploaded master files list */}
+          {masterFiles.length > 0 && (
+            <div style={{ display:"flex", flexDirection:"column", gap:6, marginBottom:12 }}>
+              {masterFiles.map((mf, idx) => (
+                <div key={mf.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:T.greenBg,border:"1px solid rgba(21,128,61,0.2)",borderRadius:8 }}>
+                  <span style={{ width:20,height:20,borderRadius:"50%",background:T.green,color:T.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0 }}>{idx+1}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12.5,fontWeight:600,color:T.green,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{mf.name}</div>
+                    <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{mf.sites.length} sites</div>
                   </div>
-                  <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1 }}>
-                    {masterSites.length} sites with coordinates — click to replace
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: T.black }}>
-                    Click to choose master file
-                  </div>
-                  <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1 }}>
-                    .xlsx / .xls / .xlsb — any sheet with Site ID + Lat + Long columns
-                  </div>
-                </>
-              )}
+                  <button onClick={() => removeMasterFile(mf.id)}
+                    style={{ width:24,height:24,borderRadius:5,border:`1px solid rgba(21,128,61,0.3)`,background:"transparent",color:T.green,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}
+                    onMouseEnter={(e)=>{e.currentTarget.style.background=T.redLight;e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                    onMouseLeave={(e)=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=T.green;e.currentTarget.style.borderColor="rgba(21,128,61,0.3)";}}>
+                    <X size={11}/>
+                  </button>
+                </div>
+              ))}
             </div>
-            <Upload size={15} color={masterReady ? T.green : T.grey500} />
-            <input
-              ref={masterFileRef}
-              type="file"
-              accept=".xlsx,.xls,.xlsb,.csv"
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const f = e.target.files[0];
-                if (f) handleMasterUpload(f);
-              }}
-            />
+          )}
+
+          {/* Add master file button */}
+          <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
+            onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.blue;e.currentTarget.style.background=T.blueBg;}}
+            onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+            <FolderOpen size={18} color={T.grey500}/>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13,fontWeight:600,color:T.black }}>
+                {masterParsing ? "Parsing file…" : masterFiles.length > 0 ? "Add another master file" : "Click to choose master file"}
+              </div>
+              <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls / .xlsb — any sheet with Site ID + Lat + Long columns</div>
+            </div>
+            <Upload size={14} color={T.grey500}/>
+            <input ref={masterFileRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+              onChange={(e) => { const f = e.target.files[0]; if (f) handleMasterUpload(f); }}/>
           </label>
+
+          {masterError && (
+            <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {masterError}</div>
+          )}
         </div>
       </div>
 
-      {/* ── Step 2: Employee GPS files ────────────────────────── */}
-      <div style={{ ...card, opacity: masterReady ? 1 : 0.5, pointerEvents: masterReady ? "auto" : "none" }}>
+      {/* ── Step 2: Employee GPS files ───────────────────────────── */}
+      <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
         <div style={cardHeader}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{
-              width: 22, height: 22, borderRadius: "50%",
-              background: masterReady ? T.red : T.grey500, color: T.white,
-              display: "inline-flex", alignItems: "center", justifyContent: "center",
-              fontSize: 11, fontWeight: 700, flexShrink: 0,
-            }}>2</span>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:masterReady?T.red:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>2</span>
             <p style={cardTitle}>Upload Employee GPS Reports</p>
           </div>
           {entries.length > 0 && (
-            <span style={{
-              fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
-              background: T.blueBg, color: T.blue, border: "1px solid rgba(29,78,216,0.2)",
-            }}>
+            <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.blueBg,color:T.blue,border:"1px solid rgba(29,78,216,0.2)" }}>
               {entries.length} file{entries.length > 1 ? "s" : ""} queued
             </span>
           )}
         </div>
-        <div style={{ padding: "16px 20px" }}>
+        <div style={{ padding:"16px 20px" }}>
           {!masterReady && (
-            <div style={{
-              fontSize: 12, color: T.grey500, textAlign: "center",
-              padding: "12px", marginBottom: 12,
-            }}>
-              Upload a master file first (Step 1) to enable this section.
+            <div style={{ fontSize:12,color:T.grey500,textAlign:"center",padding:"8px",marginBottom:12 }}>
+              Upload at least one master file first (Step 1).
             </div>
           )}
-
-          <div style={{
-            fontSize: 12, color: T.grey500,
-            background: T.grey100, borderLeft: `3px solid ${T.red}`,
-            borderRadius: "0 6px 6px 0", padding: "8px 12px", marginBottom: 16,
-          }}>
+          <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.red}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:16 }}>
             Add each person's GPS file one by one, then click <strong>Match All</strong> to process together and download one combined Excel.
           </div>
 
-          {/* Add to queue form */}
-          <form onSubmit={addToQueue} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 180 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                Person's Name
-              </label>
-              <input
-                type="text"
-                value={queueName}
-                onChange={(e) => setQueueName(e.target.value)}
-                placeholder="Optional — auto-detected"
-                style={{
-                  padding: "8px 11px", border: `1px solid ${T.border}`,
-                  borderRadius: 8, fontSize: 13, fontFamily: "inherit",
-                  color: T.black, background: "#fafafa", outline: "none",
-                }}
-                onFocus={(e) => (e.target.style.borderColor = T.red)}
-                onBlur={(e)  => (e.target.style.borderColor = T.border)}
-              />
+          <form onSubmit={addToQueue} style={{ display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end" }}>
+            <div style={{ display:"flex",flexDirection:"column",gap:5,minWidth:180 }}>
+              <label style={{ fontSize:11,fontWeight:700,color:T.grey500,textTransform:"uppercase",letterSpacing:"0.04em" }}>Person's Name</label>
+              <input type="text" value={queueName} onChange={(e)=>setQueueName(e.target.value)} placeholder="Optional — auto-detected"
+                style={{ padding:"8px 11px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",color:T.black,background:"#fafafa",outline:"none" }}
+                onFocus={(e)=>(e.target.style.borderColor=T.red)} onBlur={(e)=>(e.target.style.borderColor=T.border)}/>
             </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 220 }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                GPS Report File
-              </label>
-              <label style={{
-                display: "flex", alignItems: "center", gap: 8,
-                padding: "8px 12px",
-                border: `1px dashed ${T.red}`,
-                borderRadius: 8, cursor: "pointer",
-                background: T.redLight, color: T.red,
-                fontSize: 13, fontWeight: 500,
-              }}>
-                <Upload size={15} />
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {queueFileName || "Choose file…"}
-                </span>
-                <input
-                  ref={queueFileRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  required
-                  style={{ display: "none" }}
-                  onChange={(e) => setQueueFileName(e.target.files[0]?.name || "")}
-                />
+            <div style={{ display:"flex",flexDirection:"column",gap:5,flex:1,minWidth:220 }}>
+              <label style={{ fontSize:11,fontWeight:700,color:T.grey500,textTransform:"uppercase",letterSpacing:"0.04em" }}>GPS Report File</label>
+              <label style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 12px",border:`1px dashed ${T.red}`,borderRadius:8,cursor:"pointer",background:T.redLight,color:T.red,fontSize:13,fontWeight:500 }}>
+                <Upload size={15}/>
+                <span style={{ overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{queueFileName || "Choose file…"}</span>
+                <input ref={queueFileRef} type="file" accept=".xlsx,.xls,.csv" required style={{ display:"none" }}
+                  onChange={(e)=>setQueueFileName(e.target.files[0]?.name||"")}/>
               </label>
             </div>
-
-            <button
-              type="submit"
-              style={{
-                padding: "9px 18px",
-                background: T.red, color: T.white,
-                border: "none", borderRadius: 8,
-                fontSize: 13, fontWeight: 700, fontFamily: "inherit",
-                cursor: "pointer", whiteSpace: "nowrap",
-                display: "inline-flex", alignItems: "center", gap: 6,
-              }}
-            >
-              <Plus size={15} /> Add to Queue
+            <button type="submit" style={{ padding:"9px 18px",background:T.red,color:T.white,border:"none",borderRadius:8,fontSize:13,fontWeight:700,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:6 }}>
+              <Plus size={15}/> Add to Queue
             </button>
           </form>
 
-          {/* Queue list */}
           {entries.length > 0 && (
-            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ marginTop:16,display:"flex",flexDirection:"column",gap:8 }}>
               {entries.map((entry, idx) => (
-                <div key={entry.id} style={{
-                  display: "flex", alignItems: "center", gap: 12,
-                  padding: "10px 14px",
-                  background: T.grey100,
-                  border: `1px solid ${T.border}`,
-                  borderRadius: 8,
-                }}>
-                  <span style={{
-                    width: 22, height: 22, borderRadius: "50%",
-                    background: T.red, color: T.white,
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 11, fontWeight: 700, flexShrink: 0,
-                  }}>{idx + 1}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, color: T.black }}>
-                      {entry.name || <span style={{ color: T.grey500, fontStyle: "italic" }}>Name auto-detect</span>}
-                    </div>
-                    <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {entry.fileName}
-                    </div>
+                <div key={entry.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"10px 14px",background:T.grey100,border:`1px solid ${T.border}`,borderRadius:8 }}>
+                  <span style={{ width:22,height:22,borderRadius:"50%",background:T.red,color:T.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>{idx+1}</span>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ fontWeight:600,fontSize:13,color:T.black }}>{entry.name||<span style={{ color:T.grey500,fontStyle:"italic" }}>Name auto-detect</span>}</div>
+                    <div style={{ fontSize:11.5,color:T.grey500,marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{entry.fileName}</div>
                   </div>
-                  <button
-                    onClick={() => removeFromQueue(entry.id)}
-                    style={{
-                      width: 28, height: 28, borderRadius: 6,
-                      border: `1px solid ${T.border}`, background: "transparent",
-                      color: T.grey500, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      flexShrink: 0,
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = T.redLight; e.currentTarget.style.color = T.red; e.currentTarget.style.borderColor = T.red; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.grey500; e.currentTarget.style.borderColor = T.border; }}
-                  >
-                    <X size={13} />
+                  <button onClick={()=>removeFromQueue(entry.id)}
+                    style={{ width:28,height:28,borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}
+                    onMouseEnter={(e)=>{e.currentTarget.style.background=T.redLight;e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                    onMouseLeave={(e)=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
+                    <X size={13}/>
                   </button>
                 </div>
               ))}
-
-              <button
-                onClick={handleMatchAll}
-                disabled={uploading || !masterReady}
-                style={{
-                  marginTop: 4,
-                  padding: "10px 20px",
-                  background: uploading || !masterReady ? "#ccc" : T.green,
-                  color: T.white, border: "none", borderRadius: 8,
-                  fontSize: 13.5, fontWeight: 700, fontFamily: "inherit",
-                  cursor: uploading || !masterReady ? "not-allowed" : "pointer",
-                  whiteSpace: "nowrap", alignSelf: "flex-start",
-                  display: "inline-flex", alignItems: "center", gap: 7,
-                }}
-              >
-                {uploading
-                  ? "Processing…"
-                  : `Upload & Match All (${entries.length} file${entries.length > 1 ? "s" : ""})`}
+              <button onClick={handleMatchAll} disabled={uploading||!masterReady}
+                style={{ marginTop:4,padding:"10px 20px",background:uploading||!masterReady?"#ccc":T.green,color:T.white,border:"none",borderRadius:8,fontSize:13.5,fontWeight:700,fontFamily:"inherit",cursor:uploading||!masterReady?"not-allowed":"pointer",whiteSpace:"nowrap",alignSelf:"flex-start",display:"inline-flex",alignItems:"center",gap:7 }}>
+                {uploading ? "Processing…" : `Upload & Match All (${entries.length} file${entries.length>1?"s":""})`}
               </button>
             </div>
           )}
 
           {uploadMsg && (
-            <div style={{
-              marginTop: 12, padding: "9px 14px", borderRadius: 8,
-              fontSize: 13, fontWeight: 500,
-              background: uploadMsg.type === "success" ? T.greenBg : T.redLight,
-              color:      uploadMsg.type === "success" ? T.green   : T.red,
-              border:     `1px solid ${uploadMsg.type === "success" ? "rgba(21,128,61,0.2)" : "rgba(204,0,0,0.2)"}`,
-              display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
-            }}>
+            <div style={{ marginTop:12,padding:"9px 14px",borderRadius:8,fontSize:13,fontWeight:500,background:uploadMsg.type==="success"?T.greenBg:T.redLight,color:uploadMsg.type==="success"?T.green:T.red,border:`1px solid ${uploadMsg.type==="success"?"rgba(21,128,61,0.2)":"rgba(204,0,0,0.2)"}`,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10 }}>
               <span>{uploadMsg.text}</span>
-              {uploadMsg.type === "success" && activeReport && (
-                <button
-                  onClick={downloadExcel}
-                  style={{
-                    display: "inline-flex", alignItems: "center", gap: 5,
-                    padding: "5px 12px", borderRadius: 6,
-                    background: T.green, color: "#fff",
-                    border: "none", fontSize: 12, fontWeight: 700,
-                    fontFamily: "inherit", cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
-                  }}
-                >
-                  <Download size={12} /> Download Excel
+              {uploadMsg.type==="success"&&activeReport&&(
+                <button onClick={downloadExcel} style={{ display:"inline-flex",alignItems:"center",gap:5,padding:"5px 12px",borderRadius:6,background:T.green,color:"#fff",border:"none",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0 }}>
+                  <Download size={12}/> Download Excel
                 </button>
               )}
             </div>
@@ -960,205 +744,108 @@ export default function SiteVisit() {
         </div>
       </div>
 
-      {/* ── Recent uploads ───────────────────────────────────── */}
+      {/* ── Recent uploads ────────────────────────────────────────── */}
       <div style={card}>
-        <div style={cardHeader}>
-          <p style={cardTitle}>Recent Uploads</p>
-        </div>
-        {reports.length === 0 ? (
-          <div style={{ textAlign: "center", padding: 40, color: T.grey500, fontSize: 13 }}>
-            No uploads yet. Upload GPS reports to begin.
-          </div>
-        ) : (
-          reports.slice(0, 5).map((r) => (
-            <div
-              key={r.id}
-              onClick={() => { setActiveReport(r); setSearch(""); setStatusFilter(""); }}
-              style={{
-                display: "flex", alignItems: "center", gap: 14,
-                padding: "13px 20px",
-                borderBottom: `1px solid ${T.border}`,
-                cursor: "pointer",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = T.grey100)}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-            >
-              <MapPin size={15} color={T.red} style={{ flexShrink: 0 }} />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 13.5, color: T.black }}>{r.fileName}</div>
-                <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 2 }}>
-                  {r.uploadedBy} · {r.createdAt} · {r.totalRows} rows
-                </div>
-              </div>
-              <span style={{
-                fontSize: 11.5, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
-                background: T.greenBg, color: T.green,
-                border: "1px solid rgba(21,128,61,0.2)", whiteSpace: "nowrap",
-              }}>
-                ✔ {r.matchedCount} Verified
-              </span>
-              <button
-                onClick={(e) => deleteReport(r.id, e)}
-                style={{
-                  width: 30, height: 30, borderRadius: 7,
-                  border: `1px solid ${T.border}`, background: "transparent",
-                  color: T.grey500, cursor: "pointer",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  flexShrink: 0,
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = T.redLight; e.currentTarget.style.color = T.red; e.currentTarget.style.borderColor = T.red; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = T.grey500; e.currentTarget.style.borderColor = T.border; }}
-              >
-                <Trash2 size={13} />
-              </button>
+        <div style={cardHeader}><p style={cardTitle}>Recent Uploads</p></div>
+        {reports.length===0 ? (
+          <div style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No uploads yet. Upload GPS reports to begin.</div>
+        ) : reports.slice(0,5).map((r)=>(
+          <div key={r.id} onClick={()=>{setActiveReport(r);setSearch("");setStatusFilter("");}}
+            style={{ display:"flex",alignItems:"center",gap:14,padding:"13px 20px",borderBottom:`1px solid ${T.border}`,cursor:"pointer" }}
+            onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
+            onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
+            <MapPin size={15} color={T.red} style={{ flexShrink:0 }}/>
+            <div style={{ flex:1,minWidth:0 }}>
+              <div style={{ fontWeight:600,fontSize:13.5,color:T.black }}>{r.fileName}</div>
+              <div style={{ fontSize:11.5,color:T.grey500,marginTop:2 }}>{r.uploadedBy} · {r.createdAt} · {r.totalRows} rows</div>
             </div>
-          ))
-        )}
+            <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)",whiteSpace:"nowrap" }}>✔ {r.matchedCount} Verified</span>
+            <button onClick={(e)=>deleteReport(r.id,e)}
+              style={{ width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}
+              onMouseEnter={(e)=>{e.currentTarget.style.background=T.redLight;e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+              onMouseLeave={(e)=>{e.currentTarget.style.background="transparent";e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
+              <Trash2 size={13}/>
+            </button>
+          </div>
+        ))}
       </div>
 
-      {/* ── Report detail ─────────────────────────────────────── */}
+      {/* ── Report detail ─────────────────────────────────────────── */}
       {activeReport && (
         <div style={card}>
           <div style={cardHeader}>
             <div>
               <p style={cardTitle}>{activeReport.fileName}</p>
-              <p style={{ margin: "3px 0 0", fontSize: 11.5, color: T.grey500 }}>
-                {activeReport.createdAt} · {activeReport.totalRows} rows · {activeReport.matchedCount} verified
-              </p>
+              <p style={{ margin:"3px 0 0",fontSize:11.5,color:T.grey500 }}>{activeReport.createdAt} · {activeReport.totalRows} rows · {activeReport.matchedCount} verified</p>
             </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button
-                onClick={downloadExcel}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "7px 14px", borderRadius: 8,
-                  border: `1px solid ${T.red}`, background: "transparent",
-                  color: T.red, fontSize: 12.5, fontWeight: 600,
-                  fontFamily: "inherit", cursor: "pointer",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = T.redLight)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
-                <Download size={13} /> Download Excel
+            <div style={{ display:"flex",gap:8 }}>
+              <button onClick={downloadExcel}
+                style={{ display:"inline-flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:8,border:`1px solid ${T.red}`,background:"transparent",color:T.red,fontSize:12.5,fontWeight:600,fontFamily:"inherit",cursor:"pointer" }}
+                onMouseEnter={(e)=>(e.currentTarget.style.background=T.redLight)}
+                onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
+                <Download size={13}/> Download Excel
               </button>
-              <button
-                onClick={() => setActiveReport(null)}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  padding: "7px 14px", borderRadius: 8,
-                  border: `1px solid ${T.border}`, background: "transparent",
-                  color: T.grey500, fontSize: 12.5, fontWeight: 600,
-                  fontFamily: "inherit", cursor: "pointer",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = T.grey100)}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-              >
+              <button onClick={()=>setActiveReport(null)}
+                style={{ display:"inline-flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,fontSize:12.5,fontWeight:600,fontFamily:"inherit",cursor:"pointer" }}
+                onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
+                onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
                 Close
               </button>
             </div>
           </div>
 
-          {/* Filters */}
-          <div style={{
-            padding: "12px 20px",
-            borderBottom: `1px solid ${T.border}`,
-            display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
-          }}>
-            <div style={{ flex: 1, minWidth: 200, position: "relative", display: "flex", alignItems: "center" }}>
-              <Search size={14} color={T.grey500} style={{ position: "absolute", left: 10, pointerEvents: "none" }} />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name, site, district…"
-                style={{
-                  width: "100%", padding: "7px 10px 7px 32px",
-                  border: `1px solid ${T.border}`, borderRadius: 8,
-                  fontSize: 13, fontFamily: "inherit", outline: "none",
-                  background: "#fafafa", color: T.black,
-                }}
-                onFocus={(e) => (e.target.style.borderColor = T.red)}
-                onBlur={(e)  => (e.target.style.borderColor = T.border)}
-              />
+          <div style={{ padding:"12px 20px",borderBottom:`1px solid ${T.border}`,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center" }}>
+            <div style={{ flex:1,minWidth:200,position:"relative",display:"flex",alignItems:"center" }}>
+              <Search size={14} color={T.grey500} style={{ position:"absolute",left:10,pointerEvents:"none" }}/>
+              <input type="text" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search name, site, district…"
+                style={{ width:"100%",padding:"7px 10px 7px 32px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",outline:"none",background:"#fafafa",color:T.black }}
+                onFocus={(e)=>(e.target.style.borderColor=T.red)} onBlur={(e)=>(e.target.style.borderColor=T.border)}/>
             </div>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              style={{
-                padding: "7px 12px", border: `1px solid ${T.border}`,
-                borderRadius: 8, fontSize: 13, fontFamily: "inherit",
-                outline: "none", background: "#fafafa", color: T.black, cursor: "pointer",
-              }}
-            >
+            <select value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)}
+              style={{ padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",outline:"none",background:"#fafafa",color:T.black,cursor:"pointer" }}>
               <option value="">All Statuses</option>
               <option value="Work Done - Verified">Work Done, Verified</option>
               <option value="Not at Master Site">Not at Master Site</option>
             </select>
-            <span style={{ fontSize: 12, color: T.grey500, whiteSpace: "nowrap" }}>
-              {displayRows.length} of {activeReport.rows.length} rows
-            </span>
+            <span style={{ fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{displayRows.length} of {activeReport.rows.length} rows</span>
           </div>
 
-          {/* Table */}
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
-                <tr style={{ background: T.red }}>
-                  {["#","Person","Site ID","Site Name","District","Circle",
-                    "Person GPS → Master GPS","Gap to Site","Time","Status"].map((h) => (
-                    <th key={h} style={{
-                      padding: "10px 13px", textAlign: "left",
-                      color: T.white, fontWeight: 600, fontSize: 11.5,
-                      textTransform: "uppercase", letterSpacing: "0.04em",
-                      whiteSpace: "nowrap",
-                    }}>{h}</th>
+                <tr style={{ background:T.red }}>
+                  {["#","Person","Site ID","Site Name","District","Circle","Person GPS → Master GPS","Gap to Site","Time","Status"].map((h)=>(
+                    <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:T.white,fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {displayRows.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} style={{ textAlign: "center", padding: 40, color: T.grey500, fontSize: 13 }}>
-                      No results.
-                    </td>
-                  </tr>
-                ) : displayRows.map((r) => {
+                {displayRows.length===0 ? (
+                  <tr><td colSpan={10} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
+                ) : displayRows.map((r)=>{
                   const d = fmtDist(r.distanceMeters);
                   return (
-                    <tr key={r.rowNumber}
-                      style={{ borderBottom: `1px solid ${T.border}` }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = T.grey100)}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                    >
-                      <td style={{ padding: "10px 13px", color: T.grey500, fontSize: 12 }}>{r.rowNumber}</td>
-                      <td style={{ padding: "10px 13px", fontWeight: 600, color: T.black, whiteSpace: "nowrap" }}>{r.personName}</td>
-                      <td style={{ padding: "10px 13px", fontFamily: "monospace", fontSize: 12, color: T.grey500 }}>{r.matchedSiteId || "–"}</td>
-                      <td style={{ padding: "10px 13px", color: T.black }}>{r.matchedSiteName || "–"}</td>
-                      <td style={{ padding: "10px 13px", fontSize: 12, color: T.grey500 }}>{r.district || "–"}</td>
-                      <td style={{ padding: "10px 13px", fontSize: 12, color: T.grey500 }}>{r.circle || "–"}</td>
-                      <td style={{ padding: "10px 13px" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2, fontFamily: "monospace", fontSize: 11.5, minWidth: 220 }}>
-                          <span style={{ color: T.blue, fontWeight: 600 }}>
-                            {r.userLat != null ? `${r.userLat.toFixed(5)}, ${r.userLng.toFixed(5)}` : "–"}
-                          </span>
-                          <span style={{ color: T.grey500, fontSize: 11 }}>↕ {r.masterSource || "–"}</span>
-                          <span style={{ color: T.green }}>
-                            {r.masterLat != null ? `${r.masterLat.toFixed(5)}, ${r.masterLng.toFixed(5)}` : "–"}
-                          </span>
+                    <tr key={r.rowNumber} style={{ borderBottom:`1px solid ${T.border}` }}
+                      onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
+                      onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
+                      <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{r.rowNumber}</td>
+                      <td style={{ padding:"10px 13px",fontWeight:600,color:T.black,whiteSpace:"nowrap" }}>{r.personName}</td>
+                      <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.grey500 }}>{r.matchedSiteId||"–"}</td>
+                      <td style={{ padding:"10px 13px",color:T.black }}>{r.matchedSiteName||"–"}</td>
+                      <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.district||"–"}</td>
+                      <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.circle||"–"}</td>
+                      <td style={{ padding:"10px 13px" }}>
+                        <div style={{ display:"flex",flexDirection:"column",gap:2,fontFamily:"monospace",fontSize:11.5,minWidth:220 }}>
+                          <span style={{ color:T.blue,fontWeight:600 }}>{r.userLat!=null?`${r.userLat.toFixed(5)}, ${r.userLng.toFixed(5)}`:"–"}</span>
+                          <span style={{ color:T.grey500,fontSize:11 }}>↕ {r.masterSource||"–"}</span>
+                          <span style={{ color:T.green }}>{r.masterLat!=null?`${r.masterLat.toFixed(5)}, ${r.masterLng.toFixed(5)}`:"–"}</span>
                         </div>
                       </td>
-                      <td style={{ padding: "10px 13px" }}>
-                        {d ? (
-                          <span style={{
-                            padding: "2px 8px", borderRadius: 4,
-                            fontSize: 12, fontWeight: 600,
-                            background: r.matched ? T.blueBg : T.redLight,
-                            color:      r.matched ? T.blue   : T.red,
-                          }}>{d}</span>
-                        ) : "–"}
+                      <td style={{ padding:"10px 13px" }}>
+                        {d?<span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.matched?T.blueBg:T.redLight,color:r.matched?T.blue:T.red }}>{d}</span>:"–"}
                       </td>
-                      <td style={{ padding: "10px 13px", fontSize: 12, color: T.grey500, whiteSpace: "nowrap" }}>{fmtTime(r.timeOfVisit)}</td>
-                      <td style={{ padding: "10px 13px" }}><StatusPill status={r.status} /></td>
+                      <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{fmtTime(r.timeOfVisit)}</td>
+                      <td style={{ padding:"10px 13px" }}><StatusPill status={r.status}/></td>
                     </tr>
                   );
                 })}
