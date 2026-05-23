@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   Upload, Search, Download, Trash2, MapPin,
-  CheckCircle, XCircle, Clock, Navigation2, Plus, X,
+  CheckCircle, XCircle, Clock, Navigation2, Plus, X, FolderOpen,
 } from "lucide-react";
 
 /* ── Design tokens (match App.js) ─────────────────────────────── */
@@ -132,7 +132,7 @@ function parseLLSheet(ws, map) {
       circle: String(r[iCirc] || "").trim(),
       dist:   String(r[iDist] || "").trim(),
       lat, lng,
-      source: "Site Lat/Long",
+      source: "Master File",
     });
   }
 }
@@ -192,76 +192,79 @@ function fmtTime(val) {
 /*  Main Component                                                 */
 /* ═══════════════════════════════════════════════════════════════ */
 export default function SiteVisit() {
-  const [masterSites, setMasterSites]   = useState([]);
-  const [masterLabel, setMasterLabel]   = useState("Loading master…");
-  const [masterReady, setMasterReady]   = useState(false);
-  const [reports, setReports]           = useState(() =>
+  const [masterSites, setMasterSites]     = useState([]);
+  const [masterLabel, setMasterLabel]     = useState("No master file uploaded");
+  const [masterReady, setMasterReady]     = useState(false);
+  const [masterFileName, setMasterFileName] = useState("");
+  const [masterParsing, setMasterParsing] = useState(false);
+  const masterFileRef = useRef(null);
+
+  const [reports, setReports]             = useState(() =>
     JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
   );
-  const [activeReport, setActiveReport] = useState(null);
-  const [search, setSearch]             = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  const [activeReport, setActiveReport]   = useState(null);
+  const [search, setSearch]               = useState("");
+  const [statusFilter, setStatusFilter]   = useState("");
 
   /* ── Queue state ─────────────────────────────────────────────── */
-  const [entries, setEntries]           = useState([]); // [{id, name, file, fileName}]
-  const [queueName, setQueueName]       = useState("");
+  const [entries, setEntries]             = useState([]);
+  const [queueName, setQueueName]         = useState("");
   const [queueFileName, setQueueFileName] = useState("");
   const queueFileRef = useRef(null);
 
-  const [uploadMsg, setUploadMsg]       = useState(null);
-  const [uploading, setUploading]       = useState(false);
+  const [uploadMsg, setUploadMsg]         = useState(null);
+  const [uploading, setUploading]         = useState(false);
 
-  /* ── Load masters on mount ──────────────────────────────────── */
-  useEffect(() => { loadMasters(); }, []); // eslint-disable-line
-
-  async function loadMasters() {
+  /* ── Load cached master on mount ────────────────────────────── */
+  useEffect(() => {
     try {
       const cached = localStorage.getItem(CACHE_KEY);
       if (cached) {
-        const { pan, ll } = JSON.parse(cached);
+        const { pan, ll, fileName } = JSON.parse(cached);
         const sites = buildMergedArray(new Map(pan), new Map(ll));
-        setMasterSites(sites);
-        setMasterLabel(`✔ ${sites.length} Sites Loaded`);
-        setMasterReady(true);
+        if (sites.length) {
+          setMasterSites(sites);
+          setMasterFileName(fileName || "cached master");
+          setMasterLabel(`✔ ${sites.length} Sites Loaded`);
+          setMasterReady(true);
+        }
       }
     } catch (_) {}
+  }, []);
 
+  /* ── Upload & parse master file ─────────────────────────────── */
+  async function handleMasterUpload(file) {
+    if (!file) return;
+    setMasterParsing(true);
+    setMasterReady(false);
+    setMasterLabel("Parsing master file…");
     try {
-      const [panBuf, llBuf, circleBuf] = await Promise.all([
-        fetch("/pan-india-master.xlsb").then((r) => {
-          if (!r.ok) throw new Error("pan-india-master.xlsb not found in public/");
-          return r.arrayBuffer();
-        }),
-        fetch("/site-latlong-master.xlsx").then((r) => {
-          if (!r.ok) throw new Error("site-latlong-master.xlsx not found in public/");
-          return r.arrayBuffer();
-        }),
-        fetch("/circle-latlong-master.xlsx").then((r) =>
-          r.ok ? r.arrayBuffer() : null
-        ),
-      ]);
-      const panWb    = XLSX.read(new Uint8Array(panBuf), { type: "array" });
-      const llWb     = XLSX.read(new Uint8Array(llBuf),  { type: "array" });
-      const panMap   = parsePanIndia(panWb.Sheets["Site master"]);
-      const llMap    = parseSiteLatLong(llWb);
-      if (circleBuf) {
-        const circleWb = XLSX.read(new Uint8Array(circleBuf), { type: "array" });
-        parseSiteLatLong(circleWb).forEach((v, k) => {
-          if (!llMap.has(k)) llMap.set(k, v);
-        });
-      }
+      const buf = await file.arrayBuffer();
+      const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
+
+      const panMap = wb.Sheets["Site master"]
+        ? parsePanIndia(wb.Sheets["Site master"])
+        : new Map();
+      const llMap  = parseSiteLatLong(wb);
       const sites  = buildMergedArray(panMap, llMap);
+
+      if (!sites.length)
+        throw new Error("No sites with lat/long coordinates found in this file");
+
       setMasterSites(sites);
+      setMasterFileName(file.name);
       setMasterLabel(`✔ ${sites.length} Sites Loaded`);
       setMasterReady(true);
       localStorage.setItem(CACHE_KEY, JSON.stringify({
-        pan: [...panMap.entries()],
-        ll:  [...llMap.entries()],
+        pan:      [...panMap.entries()],
+        ll:       [...llMap.entries()],
+        fileName: file.name,
       }));
     } catch (err) {
-      if (!masterReady) setMasterLabel("⚠ Master load failed");
-      console.error("SiteVisit master load:", err);
+      setMasterLabel("⚠ " + err.message);
+      setMasterReady(false);
     }
+    setMasterParsing(false);
   }
 
   /* ── Persist reports ────────────────────────────────────────── */
@@ -531,7 +534,6 @@ export default function SiteVisit() {
       }
     }
 
-    /* Renumber combined rows */
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
 
     const names = [...new Set(
@@ -676,25 +678,106 @@ export default function SiteVisit() {
               User Site Visit
             </h1>
             <p style={{ margin: 0, fontSize: 12, color: T.grey500, marginTop: 2 }}>
-              Verify field visits against master site coordinates (50 m radius)
+              Upload a master site file, then match employee GPS against it (50 m radius)
             </p>
           </div>
         </div>
-        <span style={{
-          fontSize: 12, fontWeight: 600,
-          padding: "4px 12px", borderRadius: 99,
-          background: masterReady ? T.greenBg : T.redLight,
-          color:      masterReady ? T.green   : T.red,
-          border:     `1px solid ${masterReady ? "rgba(21,128,61,0.2)" : "rgba(204,0,0,0.2)"}`,
-        }}>
-          {masterLabel}
-        </span>
       </div>
 
-      {/* ── Upload panel ─────────────────────────────────────── */}
+      {/* ── Step 1: Master file ───────────────────────────────── */}
       <div style={card}>
         <div style={cardHeader}>
-          <p style={cardTitle}>Upload GPS Reports</p>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              width: 22, height: 22, borderRadius: "50%",
+              background: T.red, color: T.white,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 700, flexShrink: 0,
+            }}>1</span>
+            <p style={cardTitle}>Upload Master Site File</p>
+          </div>
+          {masterReady && (
+            <span style={{
+              fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
+              background: T.greenBg, color: T.green,
+              border: "1px solid rgba(21,128,61,0.2)",
+            }}>
+              ✔ {masterSites.length} Sites Loaded
+            </span>
+          )}
+        </div>
+        <div style={{ padding: "16px 20px" }}>
+          <div style={{
+            fontSize: 12, color: T.grey500,
+            background: T.grey100, borderLeft: `3px solid ${T.blue}`,
+            borderRadius: "0 6px 6px 0", padding: "8px 12px", marginBottom: 14,
+          }}>
+            Upload your master Excel file containing <strong>Site ID, Latitude and Longitude</strong> columns.
+            This file will be used to match employee GPS locations against.
+          </div>
+
+          <label style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "12px 16px",
+            border: `2px dashed ${masterReady ? T.green : T.border}`,
+            borderRadius: 10, cursor: "pointer",
+            background: masterReady ? T.greenBg : "#fafafa",
+            transition: "all 0.15s",
+          }}
+            onMouseEnter={(e) => { if (!masterReady) e.currentTarget.style.borderColor = T.red; }}
+            onMouseLeave={(e) => { if (!masterReady) e.currentTarget.style.borderColor = T.border; }}
+          >
+            <FolderOpen size={20} color={masterReady ? T.green : T.grey500} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {masterParsing ? (
+                <span style={{ fontSize: 13, color: T.grey500 }}>Parsing file…</span>
+              ) : masterReady ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.green }}>
+                    {masterFileName}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1 }}>
+                    {masterSites.length} sites with coordinates — click to replace
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.black }}>
+                    Click to choose master file
+                  </div>
+                  <div style={{ fontSize: 11.5, color: T.grey500, marginTop: 1 }}>
+                    .xlsx / .xls / .xlsb — any sheet with Site ID + Lat + Long columns
+                  </div>
+                </>
+              )}
+            </div>
+            <Upload size={15} color={masterReady ? T.green : T.grey500} />
+            <input
+              ref={masterFileRef}
+              type="file"
+              accept=".xlsx,.xls,.xlsb,.csv"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files[0];
+                if (f) handleMasterUpload(f);
+              }}
+            />
+          </label>
+        </div>
+      </div>
+
+      {/* ── Step 2: Employee GPS files ────────────────────────── */}
+      <div style={{ ...card, opacity: masterReady ? 1 : 0.5, pointerEvents: masterReady ? "auto" : "none" }}>
+        <div style={cardHeader}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              width: 22, height: 22, borderRadius: "50%",
+              background: masterReady ? T.red : T.grey500, color: T.white,
+              display: "inline-flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 700, flexShrink: 0,
+            }}>2</span>
+            <p style={cardTitle}>Upload Employee GPS Reports</p>
+          </div>
           {entries.length > 0 && (
             <span style={{
               fontSize: 12, fontWeight: 600, padding: "3px 10px", borderRadius: 99,
@@ -705,6 +788,15 @@ export default function SiteVisit() {
           )}
         </div>
         <div style={{ padding: "16px 20px" }}>
+          {!masterReady && (
+            <div style={{
+              fontSize: 12, color: T.grey500, textAlign: "center",
+              padding: "12px", marginBottom: 12,
+            }}>
+              Upload a master file first (Step 1) to enable this section.
+            </div>
+          )}
+
           <div style={{
             fontSize: 12, color: T.grey500,
             background: T.grey100, borderLeft: `3px solid ${T.red}`,
@@ -713,9 +805,8 @@ export default function SiteVisit() {
             Add each person's GPS file one by one, then click <strong>Match All</strong> to process together and download one combined Excel.
           </div>
 
-          {/* ── Add to queue form ──────────────────────────────── */}
+          {/* Add to queue form */}
           <form onSubmit={addToQueue} style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
-            {/* Person name */}
             <div style={{ display: "flex", flexDirection: "column", gap: 5, minWidth: 180 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 Person's Name
@@ -735,7 +826,6 @@ export default function SiteVisit() {
               />
             </div>
 
-            {/* File picker */}
             <div style={{ display: "flex", flexDirection: "column", gap: 5, flex: 1, minWidth: 220 }}>
               <label style={{ fontSize: 11, fontWeight: 700, color: T.grey500, textTransform: "uppercase", letterSpacing: "0.04em" }}>
                 GPS Report File
@@ -763,7 +853,6 @@ export default function SiteVisit() {
               </label>
             </div>
 
-            {/* Add button */}
             <button
               type="submit"
               style={{
@@ -779,7 +868,7 @@ export default function SiteVisit() {
             </button>
           </form>
 
-          {/* ── Queue list ────────────────────────────────────── */}
+          {/* Queue list */}
           {entries.length > 0 && (
             <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
               {entries.map((entry, idx) => (
@@ -821,7 +910,6 @@ export default function SiteVisit() {
                 </div>
               ))}
 
-              {/* Match All button */}
               <button
                 onClick={handleMatchAll}
                 disabled={uploading || !masterReady}
