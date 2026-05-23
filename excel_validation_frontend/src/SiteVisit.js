@@ -834,14 +834,14 @@ export default function SiteVisit() {
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:T.red }}>
-                  {["#","Person","Site ID","Site Name","District","Circle","Person GPS → Master GPS (File · Row · Col)","Gap to Site","Time","Status"].map((h)=>(
+                  {["#","Person","Site ID","Site Name","Circle","Person GPS → Master GPS","Gap to Site","Time","Status"].map((h)=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:T.white,fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {displayRows.length===0 ? (
-                  <tr><td colSpan={10} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
+                  <tr><td colSpan={9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
                 ) : displayRows.map((r)=>{
                   const d = fmtDist(r.distanceMeters);
                   return (
@@ -852,7 +852,6 @@ export default function SiteVisit() {
                       <td style={{ padding:"10px 13px",fontWeight:600,color:T.black,whiteSpace:"nowrap" }}>{r.personName}</td>
                       <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.grey500 }}>{r.matchedSiteId||"–"}</td>
                       <td style={{ padding:"10px 13px",color:T.black }}>{r.matchedSiteName||"–"}</td>
-                      <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.district||"–"}</td>
                       <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.circle||"–"}</td>
                       <td style={{ padding:"10px 13px" }}>
                         <div style={{ display:"flex",flexDirection:"column",gap:2,fontFamily:"monospace",fontSize:11.5,minWidth:260 }}>
