@@ -659,11 +659,16 @@ export default function SiteVisit() {
   }
 
   /* ── Filtered rows ───────────────────────────────────────────── */
+  const activeReportHasOd = activeReport && (activeReport.hasOdSurvey || activeReport.rows.some((r) => r.odVerified !== undefined));
   const displayRows = activeReport
     ? activeReport.rows.filter((r) => {
         const hay = `${r.personName} ${r.matchedSiteId} ${r.matchedSiteName} ${r.district} ${r.circle}`.toLowerCase();
-        return (!search || hay.includes(search.toLowerCase())) &&
-               (!statusFilter || r.status === statusFilter);
+        const statusMatch = statusFilter === "3-Way Verified"
+          ? (r.matched && r.odVerified)
+          : (!statusFilter || r.status === statusFilter);
+        // When OD survey is present, default to showing only 3-way verified rows
+        const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
+        return (!search || hay.includes(search.toLowerCase())) && odFilter;
       })
     : [];
 
@@ -961,8 +966,9 @@ export default function SiteVisit() {
             </div>
             <select value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)}
               style={{ padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",outline:"none",background:"#fafafa",color:T.black,cursor:"pointer" }}>
-              <option value="">All Statuses</option>
-              <option value="Work Done - Verified">Work Done, Verified</option>
+              <option value="">{activeReportHasOd ? "3-Way Verified (default)" : "All Statuses"}</option>
+              {activeReportHasOd && <option value="3-Way Verified">3-Way Verified only</option>}
+              <option value="Work Done - Verified">Verified (all)</option>
               <option value="Not at Master Site">Not at Master Site</option>
             </select>
             <span style={{ fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{displayRows.length} of {activeReport.rows.length} rows</span>
