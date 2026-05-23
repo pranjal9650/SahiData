@@ -77,9 +77,8 @@ function makeCi(headers) {
 function parsePanIndia(ws) {
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
   if (rows.length < 4) return new Map();
-  const headers = rows[2].map((h) =>
-    String(h || "").trim().toLowerCase().replace(/\r?\n/g, " ")
-  );
+  const origHeaders = rows[2].map((h) => String(h || "").trim());
+  const headers = origHeaders.map((h) => h.toLowerCase().replace(/\r?\n/g, " "));
   const ci  = makeCi(headers);
   const iId   = ci("stpl site id", "site id");
   const iName = ci("site name", "sitename", "site_name", "name");
@@ -87,6 +86,8 @@ function parsePanIndia(ws) {
   const iDist = ci("district");
   const iLat  = ci("latitude");
   const iLng  = ci("longitude");
+  const latColName = origHeaders[iLat] || "Latitude";
+  const lngColName = origHeaders[iLng] || "Longitude";
   const map = new Map();
   for (let i = 3; i < rows.length; i++) {
     const r  = rows[i];
@@ -101,6 +102,9 @@ function parsePanIndia(ws) {
       lat:    !isNaN(lat) && lat ? lat : null,
       lng:    !isNaN(lng) && lng ? lng : null,
       source: "PAN India",
+      masterRowNum: i + 1,
+      latColName,
+      lngColName,
     });
   }
   return map;
@@ -109,9 +113,8 @@ function parsePanIndia(ws) {
 function parseLLSheet(ws, map) {
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
   if (rows.length < 2) return;
-  const headers = rows[0].map((h) =>
-    String(h || "").trim().toLowerCase().replace(/\r?\n/g, " ")
-  );
+  const origHeaders = rows[0].map((h) => String(h || "").trim());
+  const headers = origHeaders.map((h) => h.toLowerCase().replace(/\r?\n/g, " "));
   const ci    = makeCi(headers);
   const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid");
   const iName = ci("site name", "sitename", "site_name", "name");
@@ -120,6 +123,8 @@ function parseLLSheet(ws, map) {
   const iLat  = ci("lat", "latitude");
   const iLng  = ci("lng", "long", "longitude", "longtitude");
   if (iId === -1 || iLat === -1 || iLng === -1) return;
+  const latColName = origHeaders[iLat] || "Lat";
+  const lngColName = origHeaders[iLng] || "Long";
   for (let i = 1; i < rows.length; i++) {
     const r   = rows[i];
     const id  = String(r[iId] || "").trim();
@@ -133,6 +138,9 @@ function parseLLSheet(ws, map) {
       dist:   String(r[iDist] || "").trim(),
       lat, lng,
       source: "Master File",
+      masterRowNum: i + 1,
+      latColName,
+      lngColName,
     });
   }
 }
@@ -267,9 +275,10 @@ export default function SiteVisit() {
       const sites  = buildMergedArray(panMap, llMap);
       if (!sites.length)
         throw new Error("No sites with lat/long coordinates found in this file");
+      const taggedSites = sites.map((s) => ({ ...s, masterFileName: file.name }));
       setMasterFiles((prev) => [
         ...prev,
-        { id: Date.now().toString(), name: file.name, sites },
+        { id: Date.now().toString(), name: file.name, sites: taggedSites },
       ]);
     } catch (err) {
       setMasterError(err.message);
@@ -426,13 +435,17 @@ export default function SiteVisit() {
           timeOfVisit:     "",
           userLat:         rowLat,
           userLng:         rowLng,
-          matchedSiteId:   nearestSite?.stsId   || "",
-          matchedSiteName: nearestSite?.name    || "",
-          district:        nearestSite?.dist    || "",
-          circle:          nearestSite?.circle  || "",
-          masterSource:    nearestSite?.source  || "",
-          masterLat:       nearestSite?.lat     ?? null,
-          masterLng:       nearestSite?.lng     ?? null,
+          matchedSiteId:   nearestSite?.stsId        || "",
+          matchedSiteName: nearestSite?.name         || "",
+          district:        nearestSite?.dist         || "",
+          circle:          nearestSite?.circle       || "",
+          masterSource:    nearestSite?.source       || "",
+          masterFileName:  nearestSite?.masterFileName || "",
+          masterRowNum:    nearestSite?.masterRowNum  ?? "",
+          masterLatCol:    nearestSite?.latColName    || "",
+          masterLngCol:    nearestSite?.lngColName    || "",
+          masterLat:       nearestSite?.lat           ?? null,
+          masterLng:       nearestSite?.lng           ?? null,
           distanceMeters:  nearestDist !== Infinity ? Math.round(nearestDist) : null,
           matched:         verified,
           status:          rowLat === null ? (fileStatus || "No GPS") : (verified ? "Work Done - Verified" : "Not at Master Site"),
@@ -483,6 +496,10 @@ export default function SiteVisit() {
             userLat: nearestLat, userLng: nearestLng,
             matchedSiteId: site.stsId, matchedSiteName: site.name,
             district: site.dist, circle: site.circle, masterSource: site.source,
+            masterFileName: site.masterFileName || "",
+            masterRowNum:   site.masterRowNum   ?? "",
+            masterLatCol:   site.latColName     || "",
+            masterLngCol:   site.lngColName     || "",
             masterLat: site.lat, masterLng: site.lng,
             distanceMeters: Math.round(nearestDist), matched: true,
             status: "Work Done - Verified",
@@ -537,17 +554,20 @@ export default function SiteVisit() {
   function downloadExcel() {
     if (!activeReport) return;
     const hdrs = ["#","Person Name","Site ID","Site Name","District","Circle",
-                  "Person GPS","Master GPS","Gap to Site","Time","Status"];
+                  "Person GPS","Master GPS","Match Source (File · Row · Column)","Gap to Site","Time","Status"];
     const data = activeReport.rows.map((r) => [
       r.rowNumber, r.personName,
       r.matchedSiteId || "", r.matchedSiteName || "", r.district || "", r.circle || "",
       r.userLat   != null ? `${r.userLat.toFixed(6)}, ${r.userLng.toFixed(6)}`     : "",
       r.masterLat != null ? `${r.masterLat.toFixed(6)}, ${r.masterLng.toFixed(6)}` : "",
+      r.masterFileName
+        ? `${r.masterFileName} · Row ${r.masterRowNum}${r.masterLatCol ? ` · ${r.masterLatCol}/${r.masterLngCol}` : ""}`
+        : (r.masterSource || ""),
       r.distanceMeters != null ? (r.distanceMeters < 1000 ? r.distanceMeters + " m" : (r.distanceMeters / 1000).toFixed(1) + " km") : "",
       fmtTime(r.timeOfVisit), r.status || "",
     ]);
     const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-    xlWs["!cols"] = [5,22,22,28,18,14,26,26,13,18,22].map((wch) => ({ wch }));
+    xlWs["!cols"] = [5,22,22,28,18,14,26,26,40,13,18,22].map((wch) => ({ wch }));
     const xlWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(xlWb, xlWs, "Verification");
     const safeName = activeReport.fileName.replace(/[^a-zA-Z0-9_\- ]/g, "").trim() || "combined";
@@ -814,7 +834,7 @@ export default function SiteVisit() {
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:T.red }}>
-                  {["#","Person","Site ID","Site Name","District","Circle","Person GPS → Master GPS","Gap to Site","Time","Status"].map((h)=>(
+                  {["#","Person","Site ID","Site Name","District","Circle","Person GPS → Master GPS (File · Row · Col)","Gap to Site","Time","Status"].map((h)=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:T.white,fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -835,9 +855,14 @@ export default function SiteVisit() {
                       <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.district||"–"}</td>
                       <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500 }}>{r.circle||"–"}</td>
                       <td style={{ padding:"10px 13px" }}>
-                        <div style={{ display:"flex",flexDirection:"column",gap:2,fontFamily:"monospace",fontSize:11.5,minWidth:220 }}>
+                        <div style={{ display:"flex",flexDirection:"column",gap:2,fontFamily:"monospace",fontSize:11.5,minWidth:260 }}>
                           <span style={{ color:T.blue,fontWeight:600 }}>{r.userLat!=null?`${r.userLat.toFixed(5)}, ${r.userLng.toFixed(5)}`:"–"}</span>
-                          <span style={{ color:T.grey500,fontSize:11 }}>↕ {r.masterSource||"–"}</span>
+                          <span style={{ color:T.grey500,fontSize:10.5,fontFamily:"'DM Sans',sans-serif",maxWidth:260,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}
+                            title={r.masterFileName?`${r.masterFileName} · Row ${r.masterRowNum} · ${r.masterLatCol}/${r.masterLngCol}`:(r.masterSource||"")}>
+                            ↕ {r.masterFileName
+                              ? `${r.masterFileName} · Row ${r.masterRowNum}${r.masterLatCol?` · ${r.masterLatCol}/${r.masterLngCol}`:""}`
+                              : (r.masterSource||"–")}
+                          </span>
                           <span style={{ color:T.green }}>{r.masterLat!=null?`${r.masterLat.toFixed(5)}, ${r.masterLng.toFixed(5)}`:"–"}</span>
                         </div>
                       </td>
