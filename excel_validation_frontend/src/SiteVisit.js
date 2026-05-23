@@ -26,7 +26,7 @@ const T = {
   purpleBg: "rgba(124,58,237,0.07)",
 };
 
-const TOLERANCE  = 50;
+const TOLERANCE  = 500;
 const STORAGE_KEY = "siteVisitReports";
 const CACHE_KEY   = "siteVisitMasterCache";
 
@@ -668,7 +668,9 @@ export default function SiteVisit() {
     : [];
 
   /* ── Status pill ─────────────────────────────────────────────── */
-  function StatusPill({ status }) {
+  function StatusPill({ status, odVerified, hasOd }) {
+    if (status === "Work Done - Verified" && hasOd && odVerified)
+      return <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:99,background:"rgba(161,102,0,0.09)",color:"#92610a",border:"1px solid rgba(161,102,0,0.25)",fontSize:11.5,fontWeight:700,whiteSpace:"nowrap" }}>★ 3-Way Verified</span>;
     if (status === "Work Done - Verified")
       return <span style={{ display:"inline-flex",alignItems:"center",gap:4,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)",fontSize:11.5,fontWeight:600,whiteSpace:"nowrap" }}><CheckCircle size={11}/> Verified</span>;
     if (status === "Not at Master Site")
@@ -692,7 +694,7 @@ export default function SiteVisit() {
         </div>
         <div>
           <h1 style={{ margin:0,fontSize:20,fontWeight:800,color:T.black,letterSpacing:"-0.4px" }}>User Site Visit</h1>
-          <p style={{ margin:0,fontSize:12,color:T.grey500,marginTop:2 }}>Upload master site file(s), then match employee GPS against them (50 m radius)</p>
+          <p style={{ margin:0,fontSize:12,color:T.grey500,marginTop:2 }}>Upload master site file(s), then match employee GPS against them (500 m radius)</p>
         </div>
       </div>
 
@@ -1021,7 +1023,7 @@ export default function SiteVisit() {
                         {d?<span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.matched?T.blueBg:T.redLight,color:r.matched?T.blue:T.red }}>{d}</span>:"–"}
                       </td>
                       <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{fmtTime(r.timeOfVisit)}</td>
-                      <td style={{ padding:"10px 13px" }}><StatusPill status={r.status}/></td>
+                      <td style={{ padding:"10px 13px" }}><StatusPill status={r.status} odVerified={r.odVerified} hasOd={activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined)}/></td>
                     </tr>
                   );
                 })}
