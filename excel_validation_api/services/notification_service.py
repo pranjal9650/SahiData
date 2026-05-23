@@ -1088,9 +1088,9 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     GPS_COLS    = ["WFH", "WFO"]
     HEADERS = ["Full Name", "Username", "Circle", "Business Domain", "Role",
                "Attendance", "Distance (km)", "No of Forms Filled",
-               "Form Type", "Validated Remark"]
+               "Form Type"]
 
-    col_widths = [24, 18, 16, 18, 12, 12, 14, 18, 30, 22]
+    col_widths = [24, 18, 16, 18, 12, 12, 14, 18, 30]
 
     # Title row
     ws.merge_cells(f"A1:{get_column_letter(len(HEADERS))}1")
@@ -1124,7 +1124,6 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             row.get("distance", 0),
             row.get("forms_count", 0),
             row.get("form_types", ""),
-            _validated_remark(row.get("attendance", ""), row.get("forms_count", 0), gps, site_master_status=sm_status),
         ]
         fill = alt_fill(ri)
         for ci, val in enumerate(vals, 1):
