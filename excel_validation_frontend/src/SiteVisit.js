@@ -227,7 +227,7 @@ export default function SiteVisit() {
     } catch (_) {}
 
     try {
-      const [panBuf, llBuf] = await Promise.all([
+      const [panBuf, llBuf, circleBuf] = await Promise.all([
         fetch("/pan-india-master.xlsb").then((r) => {
           if (!r.ok) throw new Error("pan-india-master.xlsb not found in public/");
           return r.arrayBuffer();
@@ -236,11 +236,20 @@ export default function SiteVisit() {
           if (!r.ok) throw new Error("site-latlong-master.xlsx not found in public/");
           return r.arrayBuffer();
         }),
+        fetch("/circle-latlong-master.xlsx").then((r) =>
+          r.ok ? r.arrayBuffer() : null
+        ),
       ]);
-      const panWb = XLSX.read(new Uint8Array(panBuf), { type: "array" });
-      const llWb  = XLSX.read(new Uint8Array(llBuf),  { type: "array" });
-      const panMap = parsePanIndia(panWb.Sheets["Site master"]);
-      const llMap  = parseSiteLatLong(llWb);
+      const panWb    = XLSX.read(new Uint8Array(panBuf), { type: "array" });
+      const llWb     = XLSX.read(new Uint8Array(llBuf),  { type: "array" });
+      const panMap   = parsePanIndia(panWb.Sheets["Site master"]);
+      const llMap    = parseSiteLatLong(llWb);
+      if (circleBuf) {
+        const circleWb = XLSX.read(new Uint8Array(circleBuf), { type: "array" });
+        parseSiteLatLong(circleWb).forEach((v, k) => {
+          if (!llMap.has(k)) llMap.set(k, v);
+        });
+      }
       const sites  = buildMergedArray(panMap, llMap);
       setMasterSites(sites);
       setMasterLabel(`✔ ${sites.length} Sites Loaded`);
