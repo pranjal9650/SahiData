@@ -22,6 +22,8 @@ const T = {
   orangeBg: "rgba(194,65,12,0.07)",
   blue:     "#1d4ed8",
   blueBg:   "rgba(29,78,216,0.07)",
+  purple:   "#7c3aed",
+  purpleBg: "rgba(124,58,237,0.07)",
 };
 
 const TOLERANCE  = 50;
@@ -222,6 +224,14 @@ export default function SiteVisit() {
 
   const masterReady = masterSites.length > 0;
 
+  /* ── OD Survey state ─────────────────────────────────────────── */
+  const [odRows, setOdRows]         = useState([]); // [{lat, lng}]
+  const [odFileName, setOdFileName] = useState("");
+  const [odUploadedAt, setOdUploadedAt] = useState("");
+  const [odParsing, setOdParsing]   = useState(false);
+  const [odError, setOdError]       = useState("");
+  const odFileRef = useRef(null);
+
   /* ── Reports / queue state ───────────────────────────────────── */
   const [reports, setReports]           = useState(() =>
     JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
@@ -276,9 +286,10 @@ export default function SiteVisit() {
       if (!sites.length)
         throw new Error("No sites with lat/long coordinates found in this file");
       const taggedSites = sites.map((s) => ({ ...s, masterFileName: file.name }));
+      const uploadedAt = new Date().toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
       setMasterFiles((prev) => [
         ...prev,
-        { id: Date.now().toString(), name: file.name, sites: taggedSites },
+        { id: Date.now().toString(), name: file.name, sites: taggedSites, uploadedAt },
       ]);
     } catch (err) {
       setMasterError(err.message);
@@ -294,6 +305,44 @@ export default function SiteVisit() {
   function clearAllMasters() {
     setMasterFiles([]);
     localStorage.removeItem(CACHE_KEY);
+  }
+
+  /* ── Upload & parse OD Survey file ──────────────────────────── */
+  async function handleOdUpload(file) {
+    if (!file) return;
+    setOdParsing(true);
+    setOdError("");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb  = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const ws  = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (rows.length < 2) throw new Error("OD Survey file has no data rows");
+      const headers = rows[0].map((h) => String(h || "").trim().toLowerCase().replace(/\r?\n/g, " "));
+      const ci = makeCi(headers);
+      const iLat = ci("survey lat", "survey_lat", "surveyLat", "lat", "latitude");
+      const iLng = ci("survey long", "survey_long", "survey lng", "survey_lng", "surveyLng", "lng", "long", "longitude");
+      if (iLat === -1 || iLng === -1) throw new Error("No survey lat/long columns found. Expected columns: 'Survey Lat' and 'Survey Long'");
+      const parsed = [];
+      for (let i = 1; i < rows.length; i++) {
+        const lat = parseFloat(rows[i][iLat]), lng = parseFloat(rows[i][iLng]);
+        if (isNaN(lat) || isNaN(lng) || !lat || !lng) continue;
+        if (lat < 6 || lat > 38 || lng < 60 || lng > 100) continue;
+        parsed.push({ lat, lng, rowNum: i + 1 });
+      }
+      if (!parsed.length) throw new Error("No valid GPS coordinates found in OD Survey file");
+      setOdRows(parsed);
+      setOdFileName(file.name);
+      setOdUploadedAt(new Date().toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" }));
+    } catch (err) {
+      setOdError(err.message);
+    }
+    setOdParsing(false);
+    if (odFileRef.current) odFileRef.current.value = "";
+  }
+
+  function clearOdSurvey() {
+    setOdRows([]); setOdFileName(""); setOdUploadedAt(""); setOdError("");
   }
 
   /* ── Persist reports ─────────────────────────────────────────── */
@@ -515,11 +564,36 @@ export default function SiteVisit() {
     if (!entries.length || !masterReady || uploading) return;
     setUploading(true);
     setUploadMsg(null);
+
+    // Build OD site map: siteKey → nearest OD survey GPS within 50m
+    const odSiteMap = new Map();
+    for (const { lat, lng } of odRows) {
+      let nearestSite = null, nearestDist = Infinity;
+      for (const site of masterSites) {
+        const d = haversineMeters(lat, lng, site.lat, site.lng);
+        if (d < nearestDist) { nearestDist = d; nearestSite = site; }
+      }
+      if (nearestDist <= TOLERANCE && nearestSite) {
+        const key = nearestSite.stsId.toUpperCase();
+        if (!odSiteMap.has(key))
+          odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite: Math.round(nearestDist) });
+      }
+    }
+
     const allRows = [];
     let totalMatched = 0;
     for (const entry of entries) {
       try {
         const { resultRows, matchedCount } = await processFile(entry.name, entry.file);
+        // Attach OD verification to each row
+        for (const row of resultRows) {
+          const key = (row.matchedSiteId || "").toUpperCase();
+          const od  = odSiteMap.get(key);
+          row.odVerified   = !!od;
+          row.odSurveyLat  = od?.surveyLat  ?? null;
+          row.odSurveyLng  = od?.surveyLng  ?? null;
+          row.odSurveyDist = od?.distToSite ?? null;
+        }
         allRows.push(...resultRows);
         totalMatched += matchedCount;
       } catch (err) {
@@ -536,9 +610,10 @@ export default function SiteVisit() {
       id:           Date.now().toString(),
       fileName:     `Combined — ${entries.length} file${entries.length > 1 ? "s" : ""}`,
       uploadedBy:   names || "Multiple persons",
-      createdAt:    new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+      createdAt:    new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
       matchedCount: totalMatched,
       totalRows:    allRows.length,
+      hasOdSurvey:  odRows.length > 0,
       rows:         allRows,
     };
     const all = [report, ...reports].slice(0, 20);
@@ -553,21 +628,30 @@ export default function SiteVisit() {
   /* ── Download Excel ──────────────────────────────────────────── */
   function downloadExcel() {
     if (!activeReport) return;
-    const hdrs = ["#","Person Name","Site ID","Site Name","District","Circle",
-                  "Person GPS","Master GPS","Match Source (File · Row · Column)","Gap to Site","Time","Status"];
+    const hasOd = activeReport.hasOdSurvey || activeReport.rows.some((r) => r.odVerified !== undefined);
+    const hdrs = ["#","Person Name","Site ID","Site Name","Circle",
+                  "Employee GPS","Master GPS","Match Source (File · Row · Column)",
+                  ...(hasOd ? ["OD Survey GPS","OD Verified"] : []),
+                  "Gap to Site","Time","Status"];
     const data = activeReport.rows.map((r) => [
       r.rowNumber, r.personName,
-      r.matchedSiteId || "", r.matchedSiteName || "", r.district || "", r.circle || "",
+      r.matchedSiteId || "", r.matchedSiteName || "", r.circle || "",
       r.userLat   != null ? `${r.userLat.toFixed(6)}, ${r.userLng.toFixed(6)}`     : "",
       r.masterLat != null ? `${r.masterLat.toFixed(6)}, ${r.masterLng.toFixed(6)}` : "",
       r.masterFileName
         ? `${r.masterFileName} · Row ${r.masterRowNum}${r.masterLatCol ? ` · ${r.masterLatCol}/${r.masterLngCol}` : ""}`
         : (r.masterSource || ""),
+      ...(hasOd ? [
+        r.odSurveyLat != null ? `${r.odSurveyLat.toFixed(6)}, ${r.odSurveyLng.toFixed(6)}` : "",
+        r.odVerified ? "Yes" : "No",
+      ] : []),
       r.distanceMeters != null ? (r.distanceMeters < 1000 ? r.distanceMeters + " m" : (r.distanceMeters / 1000).toFixed(1) + " km") : "",
       fmtTime(r.timeOfVisit), r.status || "",
     ]);
     const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-    xlWs["!cols"] = [5,22,22,28,18,14,26,26,40,13,18,22].map((wch) => ({ wch }));
+    const baseCols = [5,22,22,28,14,26,26,40];
+    const odCols   = hasOd ? [26,12] : [];
+    xlWs["!cols"] = [...baseCols, ...odCols, 13,18,22].map((wch) => ({ wch }));
     const xlWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(xlWb, xlWs, "Verification");
     const safeName = activeReport.fileName.replace(/[^a-zA-Z0-9_\- ]/g, "").trim() || "combined";
@@ -648,7 +732,7 @@ export default function SiteVisit() {
                   <span style={{ width:20,height:20,borderRadius:"50%",background:T.green,color:T.white,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0 }}>{idx+1}</span>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:12.5,fontWeight:600,color:T.green,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{mf.name}</div>
-                    <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{mf.sites.length} sites</div>
+                    <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{mf.sites.length} sites{mf.uploadedAt ? ` · Uploaded ${mf.uploadedAt}` : ""}</div>
                   </div>
                   <button onClick={() => removeMasterFile(mf.id)}
                     style={{ width:24,height:24,borderRadius:5,border:`1px solid rgba(21,128,61,0.3)`,background:"transparent",color:T.green,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}
@@ -683,11 +767,63 @@ export default function SiteVisit() {
         </div>
       </div>
 
-      {/* ── Step 2: Employee GPS files ───────────────────────────── */}
+      {/* ── Step 2: OD Survey (optional) ────────────────────────── */}
       <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
         <div style={cardHeader}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ width:22,height:22,borderRadius:"50%",background:masterReady?T.red:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>2</span>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:masterReady?T.purple:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>2</span>
+            <p style={cardTitle}>Upload OD Survey Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
+          </div>
+          {odFileName && (
+            <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.purpleBg,color:T.purple,border:"1px solid rgba(124,58,237,0.2)" }}>
+                ✔ {odRows.length} survey records
+              </span>
+              <button onClick={clearOdSurvey} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+        <div style={{ padding:"16px 20px" }}>
+          <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.purple}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:14 }}>
+            Upload the OD Survey form with <strong>Survey Lat</strong> and <strong>Survey Long</strong> columns.
+            Each survey record will be matched against master sites — the result will show a 3-way intersection with employee GPS.
+          </div>
+          {odFileName ? (
+            <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:T.purpleBg,border:"1px solid rgba(124,58,237,0.2)",borderRadius:8 }}>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:12.5,fontWeight:600,color:T.purple,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odFileName}</div>
+                <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odRows.length} survey GPS records · Uploaded {odUploadedAt}</div>
+              </div>
+            </div>
+          ) : (
+            <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
+              onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.purple;e.currentTarget.style.background=T.purpleBg;}}
+              onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+              <FolderOpen size={18} color={T.grey500}/>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,fontWeight:600,color:T.black }}>
+                  {odParsing ? "Parsing file…" : "Click to choose OD Survey file"}
+                </div>
+                <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls / .csv — must have Survey Lat + Survey Long columns</div>
+              </div>
+              <Upload size={14} color={T.grey500}/>
+              <input ref={odFileRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                onChange={(e) => { const f = e.target.files[0]; if (f) handleOdUpload(f); }}/>
+            </label>
+          )}
+          {odError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odError}</div>}
+        </div>
+      </div>
+
+      {/* ── Step 3: Employee GPS files ───────────────────────────── */}
+      <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
+        <div style={cardHeader}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:masterReady?T.red:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>3</span>
             <p style={cardTitle}>Upload Employee GPS Reports</p>
           </div>
           {entries.length > 0 && (
@@ -834,14 +970,16 @@ export default function SiteVisit() {
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:T.red }}>
-                  {["#","Person","Site ID","Site Name","Circle","Person GPS → Master GPS","Gap to Site","Time","Status"].map((h)=>(
+                  {["#","Person","Site ID","Site Name","Circle","Employee GPS → Master GPS",
+                    ...(activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?["OD Survey GPS"]:[]),
+                    "Gap to Site","Time","Status"].map((h)=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:T.white,fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {displayRows.length===0 ? (
-                  <tr><td colSpan={9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
+                  <tr><td colSpan={activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?10:9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
                 ) : displayRows.map((r)=>{
                   const d = fmtDist(r.distanceMeters);
                   return (
@@ -865,6 +1003,20 @@ export default function SiteVisit() {
                           <span style={{ color:T.green }}>{r.masterLat!=null?`${r.masterLat.toFixed(5)}, ${r.masterLng.toFixed(5)}`:"–"}</span>
                         </div>
                       </td>
+                      {(activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined)) && (
+                        <td style={{ padding:"10px 13px" }}>
+                          {r.odSurveyLat != null ? (
+                            <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
+                              <span style={{ color:T.purple,fontFamily:"monospace",fontSize:11.5,fontWeight:600 }}>
+                                {r.odSurveyLat.toFixed(5)}, {r.odSurveyLng.toFixed(5)}
+                              </span>
+                              <span style={{ fontSize:10.5,color:T.green,fontWeight:600 }}>✔ OD Verified</span>
+                            </div>
+                          ) : (
+                            <span style={{ fontSize:11.5,color:T.grey500 }}>–</span>
+                          )}
+                        </td>
+                      )}
                       <td style={{ padding:"10px 13px" }}>
                         {d?<span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.matched?T.blueBg:T.redLight,color:r.matched?T.blue:T.red }}>{d}</span>:"–"}
                       </td>
