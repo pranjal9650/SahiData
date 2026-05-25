@@ -1443,6 +1443,59 @@ def _find_col(columns, candidates):
 
 import math
 
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+
+# CSVs committed to the repo — used as default site lat/long master
+_BUILTIN_SITE_CSVS = [
+    os.path.join(_REPO_ROOT, "excel_validation_frontend", "Site DPR for reporting.csv"),
+    os.path.join(_REPO_ROOT, "excel_validation_frontend", "Site Master for reporting.csv"),
+]
+
+def _load_builtin_site_latlong():
+    """Read the committed frontend CSVs and return [{site_id, site_name, circle, lat, lng}]."""
+    sites = []
+    seen  = set()
+    for path in _BUILTIN_SITE_CSVS:
+        if not os.path.exists(path):
+            print(f"[SiteMaster] Not found: {path}")
+            continue
+        try:
+            df = pd.read_csv(path, dtype=str, encoding="latin-1").fillna("")
+            df.columns = df.columns.astype(str).str.strip()
+            cols = list(df.columns)
+            id_col   = _find_col(cols, ["STS Site ID", "STPL Site ID", "Temp SiteID", "Site ID", "SiteID"])
+            name_col = _find_col(cols, ["SiteName", "Site Name"])
+            circ_col = _find_col(cols, ["Circle", "CircleName", "Circle Name"])
+            lat_col  = _find_col(cols, ["Lat", "Latitude"])
+            lng_col  = _find_col(cols, ["Long", "Longitude"])
+            if not lat_col or not lng_col:
+                print(f"[SiteMaster] No lat/long columns in {os.path.basename(path)}")
+                continue
+            for _, r in df.iterrows():
+                try:
+                    lat = float(str(r.get(lat_col, "")).strip())
+                    lng = float(str(r.get(lng_col, "")).strip())
+                    if not lat or not lng or lat < 6 or lat > 38 or lng < 60 or lng > 100:
+                        continue
+                    sid = str(r.get(id_col, "")).strip() if id_col else ""
+                    key = sid.upper() if sid else f"{lat:.5f},{lng:.5f}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    sites.append({
+                        "site_id":   sid,
+                        "site_name": str(r.get(name_col, "")).strip() if name_col else "",
+                        "circle":    str(r.get(circ_col, "")).strip() if circ_col else "",
+                        "lat": lat, "lng": lng,
+                    })
+                except (ValueError, TypeError):
+                    continue
+            print(f"[SiteMaster] Loaded {len(sites)} sites so far from {os.path.basename(path)}")
+        except Exception as e:
+            print(f"[SiteMaster] Error reading {path}: {e}")
+    print(f"[SiteMaster] Built-in master total: {len(sites)} unique sites")
+    return sites
+
 def _haversine_m(lat1, lon1, lat2, lon2):
     R = 6371000
     dlat = math.radians(lat2 - lat1)
@@ -2134,15 +2187,18 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     # OD SURVEY MATCHING
     # =====================================================
 
+    # Use site_master lat/long if loaded; fall back to built-in repo CSVs
+    _effective_site_master = _site_latlong_master or _load_builtin_site_latlong()
+
     od_survey_rows = []   # [{full_name, site_id, site_name, circle, gap_m, remark}]
     _od_raw = _load_od_survey_records(report_date_str=report_date)
     if _od_raw:
         OD_TOLERANCE = 500  # metres
         for rec in _od_raw:
             slat, slng = rec["survey_lat"], rec["survey_lng"]
-            if _site_latlong_master:
+            if _effective_site_master:
                 nearest_site, nearest_dist = None, float("inf")
-                for site in _site_latlong_master:
+                for site in _effective_site_master:
                     d = _haversine_m(slat, slng, site["lat"], site["lng"])
                     if d < nearest_dist:
                         nearest_dist = d
