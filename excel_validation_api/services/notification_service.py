@@ -55,7 +55,7 @@ def get_test_mode():
 
 from services.email_service import send_email
 from database import SessionLocal
-from models import SiteMonitoring
+from models import SiteMonitoring, UploadHistory
 
 LOGO_CID   = "logo@shaurrya"
 LOGO_BYTES = None
@@ -1450,19 +1450,15 @@ def _haversine_m(lat1, lon1, lat2, lon2):
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
-def _load_od_survey_records():
-    """Load OD Survey form records from the daily od_survey file.
-    Returns list of {full_name, site_name, circle, survey_lat, survey_lng}."""
-    path = DAILY_FILES.get("od_survey", "")
-    if not path or not os.path.exists(path):
-        return []
+def _parse_od_csv(path):
+    """Parse one OD Survey valid CSV/Excel and return list of record dicts."""
     try:
         with open(path, "rb") as f:
             magic = f.read(4)
         if magic[:2] == b"PK":
             df = pd.read_excel(path, dtype=str)
         else:
-            df = pd.read_csv(path, dtype=str, encoding="latin-1")
+            df = pd.read_csv(path, dtype=str, encoding="utf-8", errors="replace")
         df = df.fillna("").astype(str)
         df.columns = (df.columns.astype(str).str.strip()
                       .str.lower().str.replace(r"\s+", " ", regex=True)
@@ -1474,13 +1470,12 @@ def _load_od_survey_records():
         lat_col    = _find_col(cols, ["survey lat", "lat"])
         lng_col    = _find_col(cols, ["survey long", "survey lng", "long", "lng", "longitude"])
         if not lat_col or not lng_col:
-            print("[OD Survey] No lat/long columns found in od_survey file")
             return []
         records = []
         for _, row in df.iterrows():
             try:
-                slat = float(row.get(lat_col, "").strip())
-                slng = float(row.get(lng_col, "").strip())
+                slat = float(str(row.get(lat_col, "")).strip())
+                slng = float(str(row.get(lng_col, "")).strip())
                 if not slat or not slng or slat < 6 or slat > 38 or slng < 60 or slng > 100:
                     continue
             except (ValueError, TypeError):
@@ -1492,11 +1487,80 @@ def _load_od_survey_records():
                 "survey_lat": slat,
                 "survey_lng": slng,
             })
-        print(f"[OD Survey] Loaded {len(records)} records from od_survey file")
         return records
     except Exception as e:
-        print(f"[OD Survey] Load error: {e}")
+        print(f"[OD Survey] Parse error for {path}: {e}")
         return []
+
+
+def _load_od_survey_records(report_date_str=None):
+    """Load OD Survey records for the report date.
+
+    Priority:
+      1. Manual override: data/daily/od_survey.xlsx (if present)
+      2. DB: upload_history rows where form_type LIKE '%OD%SURVEY%'
+         filtered to the report date, reading their valid_file CSVs.
+    report_date_str: formatted like '25 May 2026'
+    """
+    # 1 — manual override file
+    override_path = DAILY_FILES.get("od_survey", "")
+    if override_path and os.path.exists(override_path):
+        recs = _parse_od_csv(override_path)
+        print(f"[OD Survey] Loaded {len(recs)} records from manual od_survey file")
+        return recs
+
+    # 2 — read from upload_history DB
+    records = []
+    try:
+        db = SessionLocal()
+        uploads = (db.query(UploadHistory)
+                     .filter(UploadHistory.form_type.ilike("%OD%SURVEY%"))
+                     .order_by(UploadHistory.upload_time.desc())
+                     .limit(30)
+                     .all())
+        db.close()
+
+        # Try to match selected_date against report_date_str ("25 May 2026")
+        # selected_date may be stored as "2026-05-25", "25-05-2026", "25 May 2026", etc.
+        def _date_matches(sel_date, rpt):
+            """Loose date match — true if sel_date seems to refer to the same calendar day as rpt."""
+            if not sel_date or not rpt:
+                return True  # no date → include all
+            try:
+                # parse rpt ("25 May 2026")
+                rpt_dt = datetime.strptime(rpt, "%d %B %Y").date()
+            except ValueError:
+                return True
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d %B %Y", "%Y/%m/%d"):
+                try:
+                    return datetime.strptime(str(sel_date).strip(), fmt).date() == rpt_dt
+                except ValueError:
+                    continue
+            # last resort: check if day+year are present in the string
+            return str(rpt_dt.day) in sel_date and str(rpt_dt.year) in sel_date
+
+        matched_uploads = [u for u in uploads
+                           if _date_matches(u.selected_date, report_date_str)]
+
+        # If no uploads matched the exact date, fall back to the most recent upload
+        if not matched_uploads and uploads:
+            print(f"[OD Survey] No uploads matched date '{report_date_str}' — using most recent batch")
+            latest_time = uploads[0].upload_time
+            matched_uploads = [u for u in uploads
+                               if u.upload_time and (latest_time - u.upload_time).total_seconds() < 3600]
+
+        for upload in matched_uploads:
+            valid_path = upload.valid_file
+            if valid_path and os.path.exists(valid_path):
+                recs = _parse_od_csv(valid_path)
+                records.extend(recs)
+                print(f"[OD Survey] {len(recs)} records from upload id={upload.id} ({upload.selected_date})")
+
+    except Exception as e:
+        print(f"[OD Survey] DB load error: {e}")
+
+    print(f"[OD Survey] Total records loaded: {len(records)}")
+    return records
 
 _WFH_WFO_PATH = os.path.join("data", "wfh_wfo_results.json")
 
@@ -2071,30 +2135,39 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     # =====================================================
 
     od_survey_rows = []   # [{full_name, site_id, site_name, circle, gap_m, remark}]
-    _od_raw = _load_od_survey_records()
-    if _od_raw and _site_latlong_master:
+    _od_raw = _load_od_survey_records(report_date_str=report_date)
+    if _od_raw:
         OD_TOLERANCE = 500  # metres
         for rec in _od_raw:
             slat, slng = rec["survey_lat"], rec["survey_lng"]
-            nearest_site, nearest_dist = None, float("inf")
-            for site in _site_latlong_master:
-                d = _haversine_m(slat, slng, site["lat"], site["lng"])
-                if d < nearest_dist:
-                    nearest_dist = d
-                    nearest_site = site
-            gap_m  = round(nearest_dist) if nearest_site else None
-            valid  = nearest_site is not None and nearest_dist <= OD_TOLERANCE
-            od_survey_rows.append({
-                "full_name":  rec["full_name"],
-                "site_id":    nearest_site["site_id"]   if nearest_site else "",
-                "site_name":  nearest_site["site_name"] if nearest_site else rec["site_name"],
-                "circle":     nearest_site["circle"]    if nearest_site else rec["circle"],
-                "gap_m":      gap_m,
-                "remark":     "Valid - Site Visited" if valid else "Invalid",
-            })
-        print(f"[OD Survey] Matched {len(od_survey_rows)} records — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
-    elif _od_raw:
-        print("[OD Survey] od_survey file present but no site lat/long master — skipping GPS match")
+            if _site_latlong_master:
+                nearest_site, nearest_dist = None, float("inf")
+                for site in _site_latlong_master:
+                    d = _haversine_m(slat, slng, site["lat"], site["lng"])
+                    if d < nearest_dist:
+                        nearest_dist = d
+                        nearest_site = site
+                gap_m  = round(nearest_dist) if nearest_site else None
+                valid  = nearest_site is not None and nearest_dist <= OD_TOLERANCE
+                od_survey_rows.append({
+                    "full_name":  rec["full_name"],
+                    "site_id":    nearest_site["site_id"]   if nearest_site else "",
+                    "site_name":  nearest_site["site_name"] if nearest_site else rec["site_name"],
+                    "circle":     nearest_site["circle"]    if nearest_site else rec["circle"],
+                    "gap_m":      gap_m,
+                    "remark":     "Valid - Site Visited" if valid else "Invalid",
+                })
+            else:
+                # No site master lat/long — show form data without GPS verification
+                od_survey_rows.append({
+                    "full_name":  rec["full_name"],
+                    "site_id":    "",
+                    "site_name":  rec["site_name"],
+                    "circle":     rec["circle"],
+                    "gap_m":      None,
+                    "remark":     "Unverified (no site master)",
+                })
+        print(f"[OD Survey] Built {len(od_survey_rows)} rows — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
 
     # =====================================================
     # ALARM / SITE DOWN PROCESSING
