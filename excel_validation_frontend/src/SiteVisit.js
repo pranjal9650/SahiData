@@ -320,15 +320,17 @@ export default function SiteVisit() {
       if (rows.length < 2) throw new Error("OD Survey file has no data rows");
       const headers = rows[0].map((h) => String(h || "").trim().toLowerCase().replace(/\r?\n/g, " "));
       const ci = makeCi(headers);
-      const iLat = ci("survey lat", "survey_lat", "surveyLat", "lat", "latitude");
-      const iLng = ci("survey long", "survey_long", "survey lng", "survey_lng", "surveyLng", "lng", "long", "longitude");
+      const iLat   = ci("survey lat", "survey_lat", "surveyLat", "lat", "latitude");
+      const iLng   = ci("survey long", "survey_long", "survey lng", "survey_lng", "surveyLng", "lng", "long", "longitude");
+      const iOpco  = ci("opco id", "opco_id", "opcoid", "opco site id", "opco site", "site id", "siteid");
       if (iLat === -1 || iLng === -1) throw new Error("No survey lat/long columns found. Expected columns: 'Survey Lat' and 'Survey Long'");
       const parsed = [];
       for (let i = 1; i < rows.length; i++) {
         const lat = parseFloat(rows[i][iLat]), lng = parseFloat(rows[i][iLng]);
         if (isNaN(lat) || isNaN(lng) || !lat || !lng) continue;
         if (lat < 6 || lat > 38 || lng < 60 || lng > 100) continue;
-        parsed.push({ lat, lng, rowNum: i + 1 });
+        const opcoId = iOpco !== -1 ? String(rows[i][iOpco] || "").trim() : "";
+        parsed.push({ lat, lng, opcoId, rowNum: i + 1 });
       }
       if (!parsed.length) throw new Error("No valid GPS coordinates found in OD Survey file");
       setOdRows(parsed);
@@ -565,18 +567,23 @@ export default function SiteVisit() {
     setUploading(true);
     setUploadMsg(null);
 
-    // Build OD site map: siteKey → nearest OD survey GPS within 50m
+    // Build OD site map using criterion 1: opco id (OD form) matches site id (master)
     const odSiteMap = new Map();
-    for (const { lat, lng } of odRows) {
-      let nearestSite = null, nearestDist = Infinity;
-      for (const site of masterSites) {
-        const d = haversineMeters(lat, lng, site.lat, site.lng);
-        if (d < nearestDist) { nearestDist = d; nearestSite = site; }
-      }
-      if (nearestDist <= TOLERANCE && nearestSite) {
-        const key = nearestSite.stsId.toUpperCase();
-        if (!odSiteMap.has(key))
-          odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite: Math.round(nearestDist) });
+    for (const { lat, lng, opcoId } of odRows) {
+      if (!opcoId) continue;
+      const norm = opcoId.trim().toLowerCase();
+      const matchedSite = masterSites.find(
+        (s) => s.stsId && s.stsId.trim().toLowerCase() === norm
+      );
+      if (matchedSite) {
+        const key = matchedSite.stsId.toUpperCase();
+        if (!odSiteMap.has(key)) {
+          // Calculate GPS distance between OD survey GPS and master site GPS (informational)
+          const distToSite = (matchedSite.lat && matchedSite.lng)
+            ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
+            : null;
+          odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite });
+        }
       }
     }
 
