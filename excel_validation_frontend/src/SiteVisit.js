@@ -700,8 +700,8 @@ export default function SiteVisit() {
         const hay = `${r.personName} ${r.matchedSiteId} ${r.matchedSiteName} ${r.district} ${r.circle}`.toLowerCase();
         if (!search || hay.includes(search.toLowerCase())) {
           if (r.odMismatch) {
-            // OD mismatch rows: show in default, "Not at Master Site", and no explicit filter
-            return !statusFilter || statusFilter === "Not at Master Site";
+            // OD mismatch rows always show — they represent real issues regardless of filter
+            return true;
           }
           const statusMatch = statusFilter === "3-Way Verified"
             ? (r.matched && r.odVerified)
