@@ -323,14 +323,16 @@ export default function SiteVisit() {
       const iLat   = ci("survey lat", "survey_lat", "surveyLat", "lat", "latitude");
       const iLng   = ci("survey long", "survey_long", "survey lng", "survey_lng", "surveyLng", "lng", "long", "longitude");
       const iOpco  = ci("opco id", "opco_id", "opcoid", "opco site id", "opco site", "site id", "siteid");
+      const iName  = ci("name", "user name", "username", "employee name", "person name", "person");
       if (iLat === -1 || iLng === -1) throw new Error("No survey lat/long columns found. Expected columns: 'Survey Lat' and 'Survey Long'");
       const parsed = [];
       for (let i = 1; i < rows.length; i++) {
         const lat = parseFloat(rows[i][iLat]), lng = parseFloat(rows[i][iLng]);
         if (isNaN(lat) || isNaN(lng) || !lat || !lng) continue;
         if (lat < 6 || lat > 38 || lng < 60 || lng > 100) continue;
-        const opcoId = iOpco !== -1 ? String(rows[i][iOpco] || "").trim() : "";
-        parsed.push({ lat, lng, opcoId, rowNum: i + 1 });
+        const opcoId     = iOpco !== -1 ? String(rows[i][iOpco] || "").trim() : "";
+        const personName = iName !== -1 ? String(rows[i][iName] || "").trim() : "";
+        parsed.push({ lat, lng, opcoId, personName, rowNum: i + 1 });
       }
       if (!parsed.length) throw new Error("No valid GPS coordinates found in OD Survey file");
       setOdRows(parsed);
@@ -578,7 +580,7 @@ export default function SiteVisit() {
         (s) => s.stsId && s.stsId.trim().toLowerCase() === norm
       );
       if (!matchedSite) {
-        odNoMatch.push({ opcoId, surveyLat: lat, surveyLng: lng });
+        odNoMatch.push({ opcoId, personName, surveyLat: lat, surveyLng: lng });
         continue;
       }
       // Criterion 2: OD survey GPS must be within 500m of the master site GPS
@@ -586,7 +588,7 @@ export default function SiteVisit() {
         ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
         : null;
       if (distToSite !== null && distToSite > TOLERANCE) {
-        odGpsFar.push({ opcoId, surveyLat: lat, surveyLng: lng, distToSite });
+        odGpsFar.push({ opcoId, personName, surveyLat: lat, surveyLng: lng, distToSite });
         continue;
       }
       const key = matchedSite.stsId.toUpperCase();
@@ -616,6 +618,23 @@ export default function SiteVisit() {
         return;
       }
     }
+    // Append unmatched OD Survey rows as special rows in the table
+    const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))];
+    for (const u of allUnmatched) {
+      allRows.push({
+        odMismatch:      true,
+        personName:      u.personName || "—",
+        matchedSiteId:   u.opcoId,
+        matchedSiteName: "",
+        circle:          "",
+        matched:         false,
+        odVerified:      false,
+        status:          u.gpsFar ? `GPS too far (${u.distToSite} m)` : "Site not in master file",
+        odMismatchReason: u.gpsFar ? `GPS too far — ${u.distToSite} m from site` : "Opco ID not found in master/DPR file",
+        odSurveyLat:     u.surveyLat,
+        odSurveyLng:     u.surveyLng,
+      });
+    }
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
     const names = [...new Set(
       entries.map((e) => e.name).filter(Boolean).concat(allRows.map((r) => r.personName).filter(Boolean))
@@ -628,7 +647,6 @@ export default function SiteVisit() {
       matchedCount: totalMatched,
       totalRows:    allRows.length,
       hasOdSurvey:  odRows.length > 0,
-      odUnmatched:  [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))],
       rows:         allRows,
     };
     const all = [report, ...reports].slice(0, 20);
@@ -678,12 +696,19 @@ export default function SiteVisit() {
   const displayRows = activeReport
     ? activeReport.rows.filter((r) => {
         const hay = `${r.personName} ${r.matchedSiteId} ${r.matchedSiteName} ${r.district} ${r.circle}`.toLowerCase();
-        const statusMatch = statusFilter === "3-Way Verified"
-          ? (r.matched && r.odVerified)
-          : (!statusFilter || r.status === statusFilter);
-        // When OD survey is present, default to showing only 3-way verified rows
-        const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
-        return (!search || hay.includes(search.toLowerCase())) && odFilter;
+        if (!search || hay.includes(search.toLowerCase())) {
+          if (r.odMismatch) {
+            // OD mismatch rows: show in default, "Not at Master Site", and no explicit filter
+            return !statusFilter || statusFilter === "Not at Master Site";
+          }
+          const statusMatch = statusFilter === "3-Way Verified"
+            ? (r.matched && r.odVerified)
+            : (!statusFilter || r.status === statusFilter);
+          // When OD survey is present, default to showing 3-way verified + mismatch rows
+          const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
+          return odFilter;
+        }
+        return false;
       })
     : [];
 
@@ -1004,6 +1029,26 @@ export default function SiteVisit() {
                 {displayRows.length===0 ? (
                   <tr><td colSpan={activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?10:9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
                 ) : displayRows.map((r)=>{
+                  const hasOdCol = activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined);
+                  const colSpan  = hasOdCol ? 10 : 9;
+                  // OD mismatch rows: special red row
+                  if (r.odMismatch) {
+                    return (
+                      <tr key={`odm-${r.rowNumber}`} style={{ borderBottom:`1px solid ${T.border}`, background:"rgba(220,38,38,0.03)" }}
+                        onMouseEnter={(e)=>(e.currentTarget.style.background="rgba(220,38,38,0.07)")}
+                        onMouseLeave={(e)=>(e.currentTarget.style.background="rgba(220,38,38,0.03)")}>
+                        <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{r.rowNumber}</td>
+                        <td style={{ padding:"10px 13px",fontWeight:600,color:T.black,whiteSpace:"nowrap" }}>{r.personName}</td>
+                        <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.red,fontWeight:600 }}>{r.matchedSiteId||"–"}</td>
+                        <td colSpan={colSpan - 3} style={{ padding:"10px 13px",color:T.red,fontSize:12 }}>
+                          <div style={{ display:"flex",flexDirection:"column",gap:3 }}>
+                            <span style={{ fontWeight:700 }}>⚠ {r.odMismatchReason}</span>
+                            {r.odSurveyLat!=null && <span style={{ fontFamily:"monospace",fontSize:11,color:T.grey500 }}>OD GPS: {r.odSurveyLat.toFixed(5)}, {r.odSurveyLng.toFixed(5)}</span>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
                   const d = fmtDist(r.distanceMeters);
                   return (
                     <tr key={r.rowNumber} style={{ borderBottom:`1px solid ${T.border}` }}
@@ -1054,50 +1099,6 @@ export default function SiteVisit() {
         </div>
       )}
 
-      {/* ── OD Survey: Unmatched Sites ──────────────────────────────── */}
-      {activeReport && activeReport.hasOdSurvey && activeReport.odUnmatched && activeReport.odUnmatched.length > 0 && (
-        <div style={{ ...card, marginTop: 16 }}>
-          <div style={{ ...cardHeader, background: "rgba(220,38,38,0.05)", borderBottom: `1px solid rgba(220,38,38,0.15)` }}>
-            <p style={{ ...cardTitle, color: T.red }}>
-              OD Survey — Site Not Matched &nbsp;
-              <span style={{ fontWeight: 500, fontSize: 12, color: T.red, opacity: 0.8 }}>
-                ({activeReport.odUnmatched.length} record{activeReport.odUnmatched.length > 1 ? "s" : ""})
-              </span>
-            </p>
-            <span style={{ fontSize: 11.5, color: T.grey500 }}>
-              These OD Survey entries could not be verified — opco id not found in master or GPS too far
-            </span>
-          </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: T.red }}>
-                  {["#", "Opco ID", "Survey GPS", "Reason"].map((h) => (
-                    <th key={h} style={{ padding: "9px 13px", textAlign: "left", color: T.white, fontWeight: 600, fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {activeReport.odUnmatched.map((row, idx) => (
-                  <tr key={idx} style={{ borderBottom: `1px solid ${T.border}`, background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
-                    <td style={{ padding: "9px 13px", color: T.grey500, fontSize: 12 }}>{idx + 1}</td>
-                    <td style={{ padding: "9px 13px", fontWeight: 600, color: T.red }}>{row.opcoId}</td>
-                    <td style={{ padding: "9px 13px", fontFamily: "monospace", fontSize: 12, color: T.black }}>
-                      {row.surveyLat?.toFixed(5)}, {row.surveyLng?.toFixed(5)}
-                    </td>
-                    <td style={{ padding: "9px 13px", fontSize: 12 }}>
-                      {row.gpsFar
-                        ? <span style={{ color: "#b45309", fontWeight: 600 }}>GPS too far — {row.distToSite} m from site</span>
-                        : <span style={{ color: T.red, fontWeight: 600 }}>Opco ID not in master file</span>
-                      }
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
