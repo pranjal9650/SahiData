@@ -1124,7 +1124,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             row.get("attendance", ""),
             row.get("distance", 0),
             row.get("forms_count", 0),
-            row.get("form_types", ""),
+            row.get("form_types", "") or "—",
         ]
         fill = alt_fill(ri)
         for ci, val in enumerate(vals, 1):
