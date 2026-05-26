@@ -619,9 +619,15 @@ export default function SiteVisit() {
       }
     }
     // Only show OD mismatches for persons who appear in the employee GPS data
-    const gpsPersonNames = new Set(allRows.map(r => (r.personName || "").trim().toLowerCase()).filter(Boolean));
+    // Use partial match to handle username vs display name variations (e.g. "afsar_st" vs "Afsar")
+    const gpsPersonNames = allRows.map(r => (r.personName || "").trim().toLowerCase()).filter(Boolean);
+    function matchesGpsPerson(odName) {
+      if (!odName) return false;
+      const n = odName.trim().toLowerCase();
+      return gpsPersonNames.some(g => g === n || g.includes(n) || n.includes(g));
+    }
     const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))]
-      .filter(u => u.personName && gpsPersonNames.has(u.personName.trim().toLowerCase()));
+      .filter(u => matchesGpsPerson(u.personName));
     for (const u of allUnmatched) {
       allRows.push({
         odMismatch:      true,
