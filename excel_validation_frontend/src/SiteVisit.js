@@ -576,14 +576,14 @@ export default function SiteVisit() {
         (s) => s.stsId && s.stsId.trim().toLowerCase() === norm
       );
       if (matchedSite) {
+        // Criterion 2: OD survey GPS must be within 500m of the master site GPS
+        const distToSite = (matchedSite.lat && matchedSite.lng)
+          ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
+          : null;
+        if (distToSite !== null && distToSite > TOLERANCE) continue;
         const key = matchedSite.stsId.toUpperCase();
-        if (!odSiteMap.has(key)) {
-          // Calculate GPS distance between OD survey GPS and master site GPS (informational)
-          const distToSite = (matchedSite.lat && matchedSite.lng)
-            ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
-            : null;
+        if (!odSiteMap.has(key))
           odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite });
-        }
       }
     }
 
