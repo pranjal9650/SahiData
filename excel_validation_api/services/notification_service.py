@@ -1352,16 +1352,17 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         for ci, w in enumerate(sd_widths, 1):
             ws3.column_dimensions[get_column_letter(ci)].width = w
 
-    # ── OD Survey Sheet ───────────────────────────────────────────────
+    # ── OD Survey Form Sheet ──────────────────────────────────────────
     if od_survey_rows:
-        ws_od = wb.create_sheet("OD Survey")
-        OD_HEADERS = ["Person", "Site ID", "Site Name", "Circle", "Gap to Site", "Validated Remark"]
-        od_widths   = [26, 22, 32, 16, 14, 22]
+        ws_od = wb.create_sheet("OD Survey Form")
+        OD_HEADERS = ["#", "Person", "Site ID", "Site Name", "Circle",
+                      "Employee GPS → Master GPS", "OD Survey GPS", "Gap to Site", "Time", "Validated Remark"]
+        od_widths  = [5, 22, 22, 28, 14, 50, 26, 14, 18, 18]
 
         # Title
         ws_od.merge_cells(f"A1:{get_column_letter(len(OD_HEADERS))}1")
         tc = ws_od["A1"]
-        tc.value     = f"OD Survey Verification — {report_date}"
+        tc.value     = f"OD Survey Form — {report_date}"
         tc.font      = Font(bold=True, color=BLUE, name="Calibri", size=13)
         tc.alignment = center()
         tc.fill      = PatternFill("solid", fgColor="EFF6FF")
@@ -1376,10 +1377,10 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
 
         GREEN_FILL  = PatternFill("solid", fgColor="DCFCE7")
         RED_FILL    = PatternFill("solid", fgColor="FEE2E2")
+        YELLOW_FILL = PatternFill("solid", fgColor="FEF9C3")
         GREEN_FONT  = Font(color="15803D", name="Calibri", size=10, bold=True)
         RED_FONT    = Font(color="991B1B", name="Calibri", size=10, bold=True)
 
-        # Per-person summary rows first (grouped by person)
         from collections import OrderedDict
         person_groups = OrderedDict()
         for r in od_survey_rows:
@@ -1387,33 +1388,51 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
 
         row_idx = 3
         for person, recs in person_groups.items():
-            valid_c   = sum(1 for r in recs if r["remark"].startswith("Valid"))
-            invalid_c = len(recs) - valid_c
+            visited_c   = sum(1 for r in recs if r["remark"] == "Site Visited")
+            not_visited = len(recs) - visited_c
 
-            # Person summary row (blue group header)
+            # Person summary header row
             ws_od.merge_cells(f"A{row_idx}:{get_column_letter(len(OD_HEADERS))}{row_idx}")
             sc = ws_od.cell(row=row_idx, column=1,
-                            value=f"{person}   —   {len(recs)} OD Survey form(s)  ·  {valid_c} Valid  ·  {invalid_c} Invalid")
+                            value=f"{person}   —   {len(recs)} OD Survey form(s)  ·  {visited_c} Site Visited  ·  {not_visited} Not Visited")
             sc.font = grp_font(); sc.fill = grp_fill()
             sc.alignment = left(); sc.border = all_border()
             ws_od.row_dimensions[row_idx].height = 18
             row_idx += 1
 
             for ri, rec in enumerate(recs, row_idx):
-                gap_str = (f"{rec['gap_m']} m" if rec["gap_m"] is not None and rec["gap_m"] < 1000
-                           else f"{rec['gap_m']/1000:.1f} km" if rec["gap_m"] is not None else "–")
-                vals = [person, rec["site_id"], rec["site_name"], rec["circle"], gap_str, rec["remark"]]
-                is_valid = rec["remark"].startswith("Valid")
-                remark_fill = GREEN_FILL if is_valid else RED_FILL
-                remark_font = GREEN_FONT if is_valid else RED_FONT
-                row_fill = alt_fill(ri)
+                gap_str = rec.get("gap_str") or (
+                    f"{rec['gap_m']} m" if rec.get("gap_m") is not None and rec["gap_m"] < 1000
+                    else f"{rec['gap_m']/1000:.1f} km" if rec.get("gap_m") is not None else "–"
+                )
+                # Build combined Employee GPS → Master GPS cell
+                emp_gps    = rec.get("employee_gps", "")
+                master_gps = rec.get("master_gps", "")
+                match_src  = rec.get("match_source", "")
+                if emp_gps or master_gps:
+                    gps_cell = "\n".join(filter(None, [emp_gps, match_src, master_gps]))
+                else:
+                    gps_cell = "–"
+                od_gps   = rec.get("od_gps", "") or "–"
+                time_str = rec.get("time_str", "") or "–"
+                row_num  = rec.get("row_num", "")
+
+                is_visited = rec["remark"] == "Site Visited"
+                remark_fill = GREEN_FILL if is_visited else RED_FILL
+                remark_font = GREEN_FONT if is_visited else RED_FONT
+                row_fill    = alt_fill(ri)
+
+                vals = [row_num, person, rec["site_id"], rec["site_name"], rec["circle"],
+                        gps_cell, od_gps, gap_str, time_str, rec["remark"]]
                 for ci, val in enumerate(vals, 1):
                     c = ws_od.cell(row=ri, column=ci, value=val)
                     c.fill = remark_fill if ci == len(OD_HEADERS) else row_fill
                     c.font = remark_font if ci == len(OD_HEADERS) else bod_font()
-                    c.alignment = center() if ci in (5, 6) else left()
+                    c.alignment = Alignment(wrap_text=True, vertical="top") if ci == 6 else (
+                        center() if ci in (1, 8, 9, 10) else left()
+                    )
                     c.border = all_border()
-                ws_od.row_dimensions[ri].height = 18
+                ws_od.row_dimensions[ri].height = 42  # taller for wrapped GPS cell
 
             row_idx += len(recs)
 
@@ -1697,6 +1716,12 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             _sm_lng_col    = _find_col(_sm_cols, ["Longitude", "Long", "Lng"])
             _sm_od_col     = _find_col(_sm_cols, ["OD Verified"])
             _sm_gap_col    = _find_col(_sm_cols, ["Gap to Site"])
+            _sm_emp_gps_col    = _find_col(_sm_cols, ["Employee GPS"])
+            _sm_master_gps_col = _find_col(_sm_cols, ["Master GPS"])
+            _sm_match_src_col  = _find_col(_sm_cols, ["Match Source (File · Row · Column)", "Match Source"])
+            _sm_od_gps_col     = _find_col(_sm_cols, ["OD Survey GPS"])
+            _sm_time_col       = _find_col(_sm_cols, ["Time"])
+            _sm_rownum_col     = _find_col(_sm_cols, ["#"])
             print(f"[Report] Site master columns: {_sm_cols}")
             print(f"[Report] Site master status column: {_sm_status_col}, OD Verified col: {_sm_od_col}")
             for _, r in _sm_df.iterrows():
@@ -1749,13 +1774,31 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                                     gap_m = round(float(gap_raw.lower().replace("m", "").strip()))
                             except (ValueError, TypeError):
                                 pass
+                    def _sv(col): return str(r.get(col, "")).strip() if col else ""
+                    emp_gps    = _sv(_sm_emp_gps_col)
+                    master_gps = _sv(_sm_master_gps_col)
+                    match_src  = _sv(_sm_match_src_col)
+                    od_gps     = _sv(_sm_od_gps_col)
+                    time_str   = _sv(_sm_time_col)
+                    row_num    = _sv(_sm_rownum_col)
+                    for _bad in ("nan", "none"):
+                        emp_gps    = "" if emp_gps.lower()    == _bad else emp_gps
+                        master_gps = "" if master_gps.lower() == _bad else master_gps
+                        od_gps     = "" if od_gps.lower()     == _bad else od_gps
+                        time_str   = "" if time_str.lower()   == _bad else time_str
                     _sm_od_rows.append({
-                        "full_name": person,
-                        "site_id":   site_id,
-                        "site_name": site_name,
-                        "circle":    circle,
-                        "gap_m":     gap_m,
-                        "remark":    "Valid - Site Visited" if od_val == "yes" else "Invalid",
+                        "full_name":  person,
+                        "site_id":    site_id,
+                        "site_name":  site_name,
+                        "circle":     circle,
+                        "gap_m":      gap_m,
+                        "remark":     "Site Visited" if od_val == "yes" else "Not Visited",
+                        "row_num":    row_num,
+                        "employee_gps": emp_gps,
+                        "master_gps":   master_gps,
+                        "match_source": match_src,
+                        "od_gps":       od_gps,
+                        "time_str":     time_str,
                     })
             print(f"[Report] Site master loaded: {len(_site_visit_status)} status records, {len(_site_latlong_master)} lat/long sites, {len(_sm_od_rows)} OD rows")
         except Exception as e:
@@ -2256,7 +2299,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                     "site_name":  nearest_site["site_name"] if nearest_site else rec["site_name"],
                     "circle":     nearest_site["circle"]    if nearest_site else rec["circle"],
                     "gap_m":      gap_m,
-                    "remark":     "Valid - Site Visited" if valid else "Invalid",
+                    "remark":     "Site Visited" if valid else "Not Visited",
                 })
             else:
                 # No site master lat/long — show form data without GPS verification
@@ -2266,7 +2309,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                     "site_name":  rec["site_name"],
                     "circle":     rec["circle"],
                     "gap_m":      None,
-                    "remark":     "Unverified (no site master)",
+                    "remark":     "Not Visited",
                 })
         print(f"[OD Survey] Built {len(od_survey_rows)} rows — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
 
