@@ -323,7 +323,7 @@ export default function SiteVisit() {
       const iLat   = ci("survey lat", "survey_lat", "surveyLat", "lat", "latitude");
       const iLng   = ci("survey long", "survey_long", "survey lng", "survey_lng", "surveyLng", "lng", "long", "longitude");
       const iOpco  = ci("opco id", "opco_id", "opcoid", "opco site id", "opco site", "site id", "siteid");
-      const iName  = ci("name", "user name", "username", "employee name", "person name", "person");
+      const iName  = ci("user name", "username", "employee name", "person name", "person", "name");
       if (iLat === -1 || iLng === -1) throw new Error("No survey lat/long columns found. Expected columns: 'Survey Lat' and 'Survey Long'");
       const parsed = [];
       for (let i = 1; i < rows.length; i++) {
@@ -618,8 +618,10 @@ export default function SiteVisit() {
         return;
       }
     }
-    // Append unmatched OD Survey rows as special rows in the table
-    const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))];
+    // Only show OD mismatches for persons who appear in the employee GPS data
+    const gpsPersonNames = new Set(allRows.map(r => (r.personName || "").trim().toLowerCase()).filter(Boolean));
+    const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))]
+      .filter(u => u.personName && gpsPersonNames.has(u.personName.trim().toLowerCase()));
     for (const u of allUnmatched) {
       allRows.push({
         odMismatch:      true,
