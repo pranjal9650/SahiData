@@ -1016,8 +1016,6 @@ export default function SiteVisit() {
               style={{ padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",outline:"none",background:"#fafafa",color:T.black,cursor:"pointer" }}>
               <option value="">{activeReportHasOd ? "3-Way Verified (default)" : "All Statuses"}</option>
               {activeReportHasOd && <option value="3-Way Verified">3-Way Verified only</option>}
-              <option value="Work Done - Verified">Verified (all)</option>
-              <option value="Not at Master Site">Not at Master Site</option>
             </select>
             <span style={{ fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{displayRows.length} of {activeReport.rows.length} rows</span>
           </div>
