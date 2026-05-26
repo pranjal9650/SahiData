@@ -568,23 +568,30 @@ export default function SiteVisit() {
     setUploadMsg(null);
 
     // Build OD site map using criterion 1: opco id (OD form) matches site id (master)
-    const odSiteMap = new Map();
+    const odSiteMap  = new Map();
+    const odNoMatch  = []; // opcoId not found in master at all
+    const odGpsFar   = []; // opcoId matched but GPS > 500m
     for (const { lat, lng, opcoId } of odRows) {
       if (!opcoId) continue;
       const norm = opcoId.trim().toLowerCase();
       const matchedSite = masterSites.find(
         (s) => s.stsId && s.stsId.trim().toLowerCase() === norm
       );
-      if (matchedSite) {
-        // Criterion 2: OD survey GPS must be within 500m of the master site GPS
-        const distToSite = (matchedSite.lat && matchedSite.lng)
-          ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
-          : null;
-        if (distToSite !== null && distToSite > TOLERANCE) continue;
-        const key = matchedSite.stsId.toUpperCase();
-        if (!odSiteMap.has(key))
-          odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite });
+      if (!matchedSite) {
+        odNoMatch.push({ opcoId, surveyLat: lat, surveyLng: lng });
+        continue;
       }
+      // Criterion 2: OD survey GPS must be within 500m of the master site GPS
+      const distToSite = (matchedSite.lat && matchedSite.lng)
+        ? Math.round(haversineMeters(lat, lng, matchedSite.lat, matchedSite.lng))
+        : null;
+      if (distToSite !== null && distToSite > TOLERANCE) {
+        odGpsFar.push({ opcoId, surveyLat: lat, surveyLng: lng, distToSite });
+        continue;
+      }
+      const key = matchedSite.stsId.toUpperCase();
+      if (!odSiteMap.has(key))
+        odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite });
     }
 
     const allRows = [];
@@ -621,6 +628,7 @@ export default function SiteVisit() {
       matchedCount: totalMatched,
       totalRows:    allRows.length,
       hasOdSurvey:  odRows.length > 0,
+      odUnmatched:  [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))],
       rows:         allRows,
     };
     const all = [report, ...reports].slice(0, 20);
@@ -1040,6 +1048,51 @@ export default function SiteVisit() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── OD Survey: Unmatched Sites ──────────────────────────────── */}
+      {activeReport && activeReport.hasOdSurvey && activeReport.odUnmatched && activeReport.odUnmatched.length > 0 && (
+        <div style={{ ...card, marginTop: 16 }}>
+          <div style={{ ...cardHeader, background: "rgba(220,38,38,0.05)", borderBottom: `1px solid rgba(220,38,38,0.15)` }}>
+            <p style={{ ...cardTitle, color: T.red }}>
+              OD Survey — Site Not Matched &nbsp;
+              <span style={{ fontWeight: 500, fontSize: 12, color: T.red, opacity: 0.8 }}>
+                ({activeReport.odUnmatched.length} record{activeReport.odUnmatched.length > 1 ? "s" : ""})
+              </span>
+            </p>
+            <span style={{ fontSize: 11.5, color: T.grey500 }}>
+              These OD Survey entries could not be verified — opco id not found in master or GPS too far
+            </span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ background: T.red }}>
+                  {["#", "Opco ID", "Survey GPS", "Reason"].map((h) => (
+                    <th key={h} style={{ padding: "9px 13px", textAlign: "left", color: T.white, fontWeight: 600, fontSize: 11.5, textTransform: "uppercase", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeReport.odUnmatched.map((row, idx) => (
+                  <tr key={idx} style={{ borderBottom: `1px solid ${T.border}`, background: idx % 2 === 0 ? "#fff" : "#fafafa" }}>
+                    <td style={{ padding: "9px 13px", color: T.grey500, fontSize: 12 }}>{idx + 1}</td>
+                    <td style={{ padding: "9px 13px", fontWeight: 600, color: T.red }}>{row.opcoId}</td>
+                    <td style={{ padding: "9px 13px", fontFamily: "monospace", fontSize: 12, color: T.black }}>
+                      {row.surveyLat?.toFixed(5)}, {row.surveyLng?.toFixed(5)}
+                    </td>
+                    <td style={{ padding: "9px 13px", fontSize: 12 }}>
+                      {row.gpsFar
+                        ? <span style={{ color: "#b45309", fontWeight: 600 }}>GPS too far — {row.distToSite} m from site</span>
+                        : <span style={{ color: T.red, fontWeight: 600 }}>Opco ID not in master file</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
