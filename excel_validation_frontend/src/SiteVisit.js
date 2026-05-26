@@ -573,7 +573,7 @@ export default function SiteVisit() {
     const odSiteMap  = new Map();
     const odNoMatch  = []; // opcoId not found in master at all
     const odGpsFar   = []; // opcoId matched but GPS > 500m
-    for (const { lat, lng, opcoId } of odRows) {
+    for (const { lat, lng, opcoId, personName } of odRows) {
       if (!opcoId) continue;
       const norm = opcoId.trim().toLowerCase();
       const matchedSite = masterSites.find(
