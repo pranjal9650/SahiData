@@ -1680,6 +1680,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     # ---- Load site master — build username/name → Status mapping + lat/long master ----
     _site_visit_status: dict = {}
     _site_latlong_master: list = []   # [{site_id, site_name, circle, lat, lng}]
+    _sm_od_rows: list = []            # OD Survey rows extracted from Site Visit export
     _site_master_path = DAILY_FILES.get("site_master", "")
     if _site_master_path and os.path.exists(_site_master_path):
         try:
@@ -1687,15 +1688,17 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             _sm_df.columns = _sm_df.columns.astype(str).str.strip()
             _sm_cols = list(_sm_df.columns)
             _sm_uname_col  = _find_col(_sm_cols, ["Field Executive Username", "FE Username", "Username", "User Name", "User ID"])
-            _sm_name_col   = _find_col(_sm_cols, ["Field Executive Full Name", "Full Name", "Employee Name", "Name"])
+            _sm_name_col   = _find_col(_sm_cols, ["Person Name", "Field Executive Full Name", "Full Name", "Employee Name", "Name"])
             _sm_status_col = _find_col(_sm_cols, ["Status", "Visit Status", "Site Status", "Remark", "Remarks"])
             _sm_id_col     = _find_col(_sm_cols, ["STS Site ID", "STPL Site ID", "Site ID", "SiteID", "Global ID", "Temp SiteID"])
             _sm_sname_col  = _find_col(_sm_cols, ["Site Name", "SiteName"])
             _sm_circ_col   = _find_col(_sm_cols, ["Circle Name", "Circle"])
             _sm_lat_col    = _find_col(_sm_cols, ["Latitude", "Lat"])
             _sm_lng_col    = _find_col(_sm_cols, ["Longitude", "Long", "Lng"])
+            _sm_od_col     = _find_col(_sm_cols, ["OD Verified"])
+            _sm_gap_col    = _find_col(_sm_cols, ["Gap to Site"])
             print(f"[Report] Site master columns: {_sm_cols}")
-            print(f"[Report] Site master status column: {_sm_status_col}")
+            print(f"[Report] Site master status column: {_sm_status_col}, OD Verified col: {_sm_od_col}")
             for _, r in _sm_df.iterrows():
                 status_val = str(r.get(_sm_status_col, "")).strip() if _sm_status_col else ""
                 if status_val.lower() in ("nan", "none", ""):
@@ -1722,7 +1725,39 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                             })
                     except (ValueError, TypeError):
                         pass
-            print(f"[Report] Site master loaded: {len(_site_visit_status)} status records, {len(_site_latlong_master)} lat/long sites")
+                # Extract OD Survey rows if this is a Site Visit export
+                if _sm_od_col:
+                    od_val = str(r.get(_sm_od_col, "")).strip().lower()
+                    if od_val in ("nan", "none", ""):
+                        continue
+                    person = str(r.get(_sm_name_col, "")).strip() if _sm_name_col else ""
+                    if not person or person.lower() in ("nan", "none", ""):
+                        continue
+                    site_id   = str(r.get(_sm_id_col, "")).strip() if _sm_id_col else ""
+                    site_name = str(r.get(_sm_sname_col, "")).strip() if _sm_sname_col else ""
+                    circle    = str(r.get(_sm_circ_col, "")).strip() if _sm_circ_col else ""
+                    if not site_id or site_id.lower() in ("nan", "none", ""):
+                        continue
+                    gap_m = None
+                    if _sm_gap_col:
+                        gap_raw = str(r.get(_sm_gap_col, "")).strip()
+                        if gap_raw and gap_raw.lower() not in ("nan", "none", ""):
+                            try:
+                                if "km" in gap_raw.lower():
+                                    gap_m = round(float(gap_raw.lower().replace("km", "").strip()) * 1000)
+                                else:
+                                    gap_m = round(float(gap_raw.lower().replace("m", "").strip()))
+                            except (ValueError, TypeError):
+                                pass
+                    _sm_od_rows.append({
+                        "full_name": person,
+                        "site_id":   site_id,
+                        "site_name": site_name,
+                        "circle":    circle,
+                        "gap_m":     gap_m,
+                        "remark":    "Valid - Site Visited" if od_val == "yes" else "Invalid",
+                    })
+            print(f"[Report] Site master loaded: {len(_site_visit_status)} status records, {len(_site_latlong_master)} lat/long sites, {len(_sm_od_rows)} OD rows")
         except Exception as e:
             print(f"[Report] Site master read error: {e}")
 
@@ -2191,7 +2226,17 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     _effective_site_master = _site_latlong_master or _load_builtin_site_latlong()
 
     od_survey_rows = []   # [{full_name, site_id, site_name, circle, gap_m, remark}]
-    _od_raw = _load_od_survey_records(report_date_str=report_date)
+
+    # Priority 1: site_master upload is a Site Visit export (has "OD Verified" column)
+    if _sm_od_rows:
+        od_survey_rows = _sm_od_rows
+        print(f"[OD Survey] Loaded {len(od_survey_rows)} rows from site_master (Site Visit export) — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
+
+    # Priority 2: upload_history DB records
+    if not od_survey_rows:
+        _od_raw = _load_od_survey_records(report_date_str=report_date)
+    else:
+        _od_raw = []
     if _od_raw:
         OD_TOLERANCE = 500  # metres
         for rec in _od_raw:
