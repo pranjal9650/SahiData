@@ -674,7 +674,7 @@ export default function SiteVisit() {
                   "Employee GPS","Master GPS","Match Source (File · Row · Column)",
                   ...(hasOd ? ["OD Survey GPS","OD Verified"] : []),
                   "Gap to Site","Time","Status"];
-    const data = activeReport.rows.map((r) => [
+    const data = displayRows.map((r) => [
       r.rowNumber, r.personName,
       r.matchedSiteId || "", r.matchedSiteName || "", r.circle || "",
       r.userLat   != null ? `${r.userLat.toFixed(6)}, ${r.userLng.toFixed(6)}`     : "",
