@@ -1382,12 +1382,26 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         RED_FONT    = Font(color="991B1B", name="Calibri", size=10, bold=True)
 
         from collections import OrderedDict
-        person_groups = OrderedDict()
+
+        def _person_key(name):
+            """Normalize username → display name: strip _st/_sts/_stn suffix."""
+            return re.sub(r'_st[sn]?$', '', name, flags=re.IGNORECASE).strip().lower()
+
+        # Group rows by normalized name; prefer display name (no suffix) as group label
+        person_groups  = OrderedDict()   # key → [rows]
+        person_display = {}              # key → best display name
         for r in od_survey_rows:
-            person_groups.setdefault(r["full_name"], []).append(r)
+            key = _person_key(r["full_name"])
+            person_groups.setdefault(key, []).append(r)
+            existing = person_display.get(key, "")
+            new_name = r["full_name"]
+            # Prefer the name without _st suffix (shorter = cleaner display name)
+            if not existing or len(new_name) < len(existing):
+                person_display[key] = new_name
 
         row_idx = 3
-        for person, recs in person_groups.items():
+        for key, recs in person_groups.items():
+            person = person_display[key]
             visited_c   = sum(1 for r in recs if r["remark"] == "Site Visited")
             not_visited = len(recs) - visited_c
 
