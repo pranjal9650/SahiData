@@ -674,8 +674,8 @@ export default function SiteVisit() {
                   "Employee GPS","Master GPS","Match Source (File · Row · Column)",
                   ...(hasOd ? ["OD Survey GPS","OD Verified"] : []),
                   "Gap to Site","Time","Status"];
-    const data = displayRows.map((r) => [
-      r.rowNumber, r.personName,
+    const data = displayRows.map((r, i) => [
+      i + 1, r.personName,
       r.matchedSiteId || "", r.matchedSiteName || "", r.circle || "",
       r.userLat   != null ? `${r.userLat.toFixed(6)}, ${r.userLng.toFixed(6)}`     : "",
       r.masterLat != null ? `${r.masterLat.toFixed(6)}, ${r.masterLng.toFixed(6)}` : "",
@@ -1034,7 +1034,8 @@ export default function SiteVisit() {
               <tbody>
                 {displayRows.length===0 ? (
                   <tr><td colSpan={activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?10:9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
-                ) : displayRows.map((r)=>{
+                ) : displayRows.map((r, idx)=>{
+                  const dispNum  = idx + 1;
                   const hasOdCol = activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined);
                   const colSpan  = hasOdCol ? 10 : 9;
                   // OD mismatch rows: special red row
@@ -1043,7 +1044,7 @@ export default function SiteVisit() {
                       <tr key={`odm-${r.rowNumber}`} style={{ borderBottom:`1px solid ${T.border}`, background:"rgba(220,38,38,0.03)" }}
                         onMouseEnter={(e)=>(e.currentTarget.style.background="rgba(220,38,38,0.07)")}
                         onMouseLeave={(e)=>(e.currentTarget.style.background="rgba(220,38,38,0.03)")}>
-                        <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{r.rowNumber}</td>
+                        <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{dispNum}</td>
                         <td style={{ padding:"10px 13px",fontWeight:600,color:T.black,whiteSpace:"nowrap" }}>{r.personName}</td>
                         <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.red,fontWeight:600 }}>{r.matchedSiteId||"–"}</td>
                         <td colSpan={colSpan - 3} style={{ padding:"10px 13px",color:T.red,fontSize:12 }}>
@@ -1060,7 +1061,7 @@ export default function SiteVisit() {
                     <tr key={r.rowNumber} style={{ borderBottom:`1px solid ${T.border}` }}
                       onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
                       onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
-                      <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{r.rowNumber}</td>
+                      <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{dispNum}</td>
                       <td style={{ padding:"10px 13px",fontWeight:600,color:T.black,whiteSpace:"nowrap" }}>{r.personName}</td>
                       <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.grey500 }}>{r.matchedSiteId||"–"}</td>
                       <td style={{ padding:"10px 13px",color:T.black }}>{r.matchedSiteName||"–"}</td>
