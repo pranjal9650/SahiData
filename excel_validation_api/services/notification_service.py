@@ -1806,7 +1806,9 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                         "site_name":  site_name,
                         "circle":     circle,
                         "gap_m":      gap_m,
-                        "remark":     "Site Visited" if od_val == "yes" else "Not Visited",
+                        "remark":     ("Site Visited" if od_val == "yes"
+                                      else "GPS too far from site" if emp_gps
+                                      else "Opco ID not in master file"),
                         "row_num":    row_num,
                         "employee_gps": emp_gps,
                         "master_gps":   master_gps,
