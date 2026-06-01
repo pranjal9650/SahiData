@@ -370,7 +370,7 @@ export default function SiteVisit() {
       const headers = rows[0].map(h => String(h || "").trim().toLowerCase().replace(/\r?\n/g, " "));
       const ci = makeCi(headers);
       const iNominal  = ci("nominal", "stpl site id", "site id", "siteid");
-      const iUser     = ci("user name", "username", "created user", "createduser", "employee", "person");
+      const iUser     = ci("createduser", "created user", "modifieduser", "modified user", "username", "employee", "person");
       const iTime     = ci("time/date", "time", "date", "createddate", "timestamp");
       const iRemark   = ci("incident remark", "remark", "reason of visit", "reason");
       const iResolved = ci("problem resolved", "resolved", "problem");
@@ -388,7 +388,9 @@ export default function SiteVisit() {
         const resolved  = iResolved !== -1 ? String(r[iResolved] || "").trim() : "";
         const siteType  = iType     !== -1 ? String(r[iType]     || "").trim() : "";
         const norm = nominal.toLowerCase();
-        const matchedSite = masterSites.find(s => s.stsId && s.stsId.trim().toLowerCase() === norm);
+        const matchedSite = masterSites.find(s =>
+          (s.stsId && s.stsId.trim().toLowerCase() === norm) ||
+          (s.name  && s.name.trim().toLowerCase()  === norm));
         parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
           siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
           matched: !!matchedSite });
