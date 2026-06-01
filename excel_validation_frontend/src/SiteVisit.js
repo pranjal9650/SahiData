@@ -681,7 +681,7 @@ export default function SiteVisit() {
   /* ── Download Excel ──────────────────────────────────────────── */
   function downloadExcel() {
     if (!activeReport) return;
-    const hasOd = activeReport.hasOdSurvey || activeReport.rows.some((r) => r.odVerified !== undefined);
+    const hasOd = activeReport.hasOdSurvey;
     const hdrs = ["#","Person Name","Site ID","Site Name","Circle",
                   "Employee GPS","Master GPS","Match Source (File · Row · Column)",
                   ...(hasOd ? ["OD Survey GPS","OD Verified"] : []),
@@ -712,7 +712,7 @@ export default function SiteVisit() {
   }
 
   /* ── Filtered rows ───────────────────────────────────────────── */
-  const activeReportHasOd = activeReport && (activeReport.hasOdSurvey || activeReport.rows.some((r) => r.odVerified !== undefined));
+  const activeReportHasOd = activeReport && activeReport.hasOdSurvey;
   const displayRows = activeReport
     ? activeReport.rows.filter((r) => {
         const hay = `${r.personName} ${r.matchedSiteId} ${r.matchedSiteName} ${r.district} ${r.circle}`.toLowerCase();
@@ -1037,7 +1037,7 @@ export default function SiteVisit() {
               <thead>
                 <tr style={{ background:T.red }}>
                   {["#","Person","Site ID","Site Name","Circle","Employee GPS → Master GPS",
-                    ...(activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?["OD Survey GPS"]:[]),
+                    ...(activeReport.hasOdSurvey?["OD Survey GPS"]:[]),
                     "Gap to Site","Time","Status"].map((h)=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:T.white,fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
@@ -1045,10 +1045,10 @@ export default function SiteVisit() {
               </thead>
               <tbody>
                 {displayRows.length===0 ? (
-                  <tr><td colSpan={activeReport.hasOdSurvey||activeReport.rows.some(r=>r.odVerified!==undefined)?10:9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
+                  <tr><td colSpan={activeReport.hasOdSurvey?10:9} style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No results.</td></tr>
                 ) : displayRows.map((r, idx)=>{
                   const dispNum  = idx + 1;
-                  const hasOdCol = activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined);
+                  const hasOdCol = activeReport.hasOdSurvey;
                   const colSpan  = hasOdCol ? 10 : 9;
                   // OD mismatch rows: special red row
                   if (r.odMismatch) {
@@ -1090,7 +1090,7 @@ export default function SiteVisit() {
                           <span style={{ color:T.green }}>{r.masterLat!=null?`${r.masterLat.toFixed(5)}, ${r.masterLng.toFixed(5)}`:"–"}</span>
                         </div>
                       </td>
-                      {(activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined)) && (
+                      {(activeReport.hasOdSurvey) && (
                         <td style={{ padding:"10px 13px" }}>
                           {r.odSurveyLat != null ? (
                             <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
@@ -1108,7 +1108,7 @@ export default function SiteVisit() {
                         {d?<span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.matched?T.blueBg:T.redLight,color:r.matched?T.blue:T.red }}>{d}</span>:"–"}
                       </td>
                       <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{fmtTime(r.timeOfVisit)}</td>
-                      <td style={{ padding:"10px 13px" }}><StatusPill status={r.status} odVerified={r.odVerified} hasOd={activeReport.hasOdSurvey||activeReport.rows.some(rv=>rv.odVerified!==undefined)}/></td>
+                      <td style={{ padding:"10px 13px" }}><StatusPill status={r.status} odVerified={r.odVerified} hasOd={activeReport.hasOdSurvey}/></td>
                     </tr>
                   );
                 })}
