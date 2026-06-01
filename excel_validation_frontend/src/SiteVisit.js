@@ -223,8 +223,6 @@ export default function SiteVisit() {
   }, [masterFiles]);
 
   const masterReady = masterSites.length > 0;
-  const odOpReady   = odOpMasterSites.length > 0 && odOpResults.length > 0;
-  const gpsUploadEnabled = masterReady || odOpReady;
 
   /* ── OD Survey state ─────────────────────────────────────────── */
   const [odRows, setOdRows]         = useState([]); // [{lat, lng}]
@@ -245,6 +243,9 @@ export default function SiteVisit() {
   const [odOpParsing, setOdOpParsing]   = useState(false);
   const [odOpError, setOdOpError]       = useState("");
   const odOpRef = useRef(null);
+
+  const odOpReady      = odOpMasterSites.length > 0 && odOpResults.length > 0;
+  const gpsUploadEnabled = masterReady || odOpReady;
 
   /* ── Reports / queue state ───────────────────────────────────── */
   const [reports, setReports]           = useState(() =>
