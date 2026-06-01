@@ -118,7 +118,7 @@ function parseLLSheet(ws, map) {
   const origHeaders = rows[0].map((h) => String(h || "").trim());
   const headers = origHeaders.map((h) => h.toLowerCase().replace(/\r?\n/g, " "));
   const ci    = makeCi(headers);
-  const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid");
+  const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid", "viltempid", "vil temp id", "nominal");
   const iName = ci("site name", "sitename", "site_name", "name");
   const iCirc = ci("circle name", "circle");
   const iDist = ci("district");
