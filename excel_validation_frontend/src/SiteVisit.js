@@ -223,6 +223,8 @@ export default function SiteVisit() {
   }, [masterFiles]);
 
   const masterReady = masterSites.length > 0;
+  const odOpReady   = odOpMasterSites.length > 0 && odOpResults.length > 0;
+  const gpsUploadEnabled = masterReady || odOpReady;
 
   /* ── OD Survey state ─────────────────────────────────────────── */
   const [odRows, setOdRows]         = useState([]); // [{lat, lng}]
@@ -710,7 +712,7 @@ export default function SiteVisit() {
 
   /* ── Match all queued entries ────────────────────────────────── */
   async function handleMatchAll() {
-    if (!entries.length || !masterReady || uploading) return;
+    if (!entries.length || !gpsUploadEnabled || uploading) return;
     setUploading(true);
     setUploadMsg(null);
 
@@ -1151,10 +1153,10 @@ export default function SiteVisit() {
       </div>
 
       {/* ── Step 3: Employee GPS files ───────────────────────────── */}
-      <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
+      <div style={{ ...card, opacity:gpsUploadEnabled?1:0.5, pointerEvents:gpsUploadEnabled?"auto":"none" }}>
         <div style={cardHeader}>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ width:22,height:22,borderRadius:"50%",background:masterReady?T.red:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>3</span>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:gpsUploadEnabled?T.red:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>3</span>
             <p style={cardTitle}>Upload Employee GPS Reports</p>
           </div>
           {entries.length > 0 && (
@@ -1164,9 +1166,9 @@ export default function SiteVisit() {
           )}
         </div>
         <div style={{ padding:"16px 20px" }}>
-          {!masterReady && (
+          {!gpsUploadEnabled && (
             <div style={{ fontSize:12,color:T.grey500,textAlign:"center",padding:"8px",marginBottom:12 }}>
-              Upload at least one master file first (Step 1).
+              Upload a master file first — either the Site Master (Step 1) or the OD Operation master + form above.
             </div>
           )}
           <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.red}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:16 }}>
@@ -1211,8 +1213,8 @@ export default function SiteVisit() {
                   </button>
                 </div>
               ))}
-              <button onClick={handleMatchAll} disabled={uploading||!masterReady}
-                style={{ marginTop:4,padding:"10px 20px",background:uploading||!masterReady?"#ccc":T.green,color:T.white,border:"none",borderRadius:8,fontSize:13.5,fontWeight:700,fontFamily:"inherit",cursor:uploading||!masterReady?"not-allowed":"pointer",whiteSpace:"nowrap",alignSelf:"flex-start",display:"inline-flex",alignItems:"center",gap:7 }}>
+              <button onClick={handleMatchAll} disabled={uploading||!gpsUploadEnabled}
+                style={{ marginTop:4,padding:"10px 20px",background:uploading||!gpsUploadEnabled?"#ccc":T.green,color:T.white,border:"none",borderRadius:8,fontSize:13.5,fontWeight:700,fontFamily:"inherit",cursor:uploading||!gpsUploadEnabled?"not-allowed":"pointer",whiteSpace:"nowrap",alignSelf:"flex-start",display:"inline-flex",alignItems:"center",gap:7 }}>
                 {uploading ? "Processing…" : `Upload & Match All (${entries.length} file${entries.length>1?"s":""})`}
               </button>
             </div>
