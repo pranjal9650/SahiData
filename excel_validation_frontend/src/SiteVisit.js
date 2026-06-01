@@ -593,7 +593,7 @@ export default function SiteVisit() {
       }
       const key = matchedSite.stsId.toUpperCase();
       if (!odSiteMap.has(key))
-        odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite });
+        odSiteMap.set(key, { surveyLat: lat, surveyLng: lng, distToSite, personName });
     }
 
     const allRows = [];
@@ -618,16 +618,28 @@ export default function SiteVisit() {
         return;
       }
     }
-    // Only show OD mismatches for persons who appear in the employee GPS data
-    // Use partial match to handle username vs display name variations (e.g. "afsar_st" vs "Afsar")
-    const gpsPersonNames = allRows.map(r => (r.personName || "").trim().toLowerCase()).filter(Boolean);
-    function matchesGpsPerson(odName) {
-      if (!odName) return false;
-      const n = odName.trim().toLowerCase();
-      return gpsPersonNames.some(g => g === n || g.includes(n) || n.includes(g));
+    // Show ALL OD form entries so the user can see every submission
+    // OD entries that matched master but no GPS file row visited that site
+    const gpsMatchedSiteKeys = new Set(allRows.map(r => (r.matchedSiteId || "").toUpperCase()).filter(Boolean));
+    for (const [siteKey, odData] of odSiteMap) {
+      if (!gpsMatchedSiteKeys.has(siteKey)) {
+        allRows.push({
+          odMismatch:      true,
+          personName:      odData.personName || "—",
+          matchedSiteId:   siteKey,
+          matchedSiteName: "",
+          circle:          "",
+          matched:         false,
+          odVerified:      false,
+          status:          "OD Submitted — site not in GPS file",
+          odMismatchReason: "OD form submitted & site found in master — no GPS visit recorded for this site",
+          odSurveyLat:     odData.surveyLat,
+          odSurveyLng:     odData.surveyLng,
+        });
+      }
     }
-    const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))]
-      .filter(u => matchesGpsPerson(u.personName));
+    // OD entries that failed master matching (opco ID not found / GPS too far) — show all, no person filter
+    const allUnmatched = [...odNoMatch, ...odGpsFar.map(r => ({ ...r, gpsFar: true }))];
     for (const u of allUnmatched) {
       allRows.push({
         odMismatch:      true,
