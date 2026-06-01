@@ -712,8 +712,8 @@ export default function SiteVisit() {
           const statusMatch = statusFilter === "3-Way Verified"
             ? (r.matched && r.odVerified)
             : (!statusFilter || r.status === statusFilter);
-          // When OD survey is present, default to showing 3-way verified + mismatch rows
-          const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
+          // Default: show GPS-verified rows; "3-Way Verified only" option adds OD requirement
+          const odFilter = activeReportHasOd && !statusFilter ? r.matched : statusMatch;
           return odFilter;
         }
         return false;
