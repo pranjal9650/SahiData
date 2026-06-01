@@ -380,7 +380,11 @@ export default function SiteVisit() {
       const iLat  = ci("lat", "latitude");
       const iLng  = ci("long", "lng", "longitude");
       if (iId === -1)  throw new Error("No site ID column found (expected: VILTEMPID, Nominal, or Site ID)");
-      if (iLat === -1 || iLng === -1) throw new Error("No LAT/LONG columns found");
+      if (iLat === -1 || iLng === -1) {
+        const isForm = ci("incident remark", "problem resolved", "reason of visit", "createduser", "created user") !== -1;
+        if (isForm) throw new Error("This looks like the OD Operation Form — upload it in the 'OD Operation Form' section below. Upload the ALL CIRCLES NOMINAL master file here (needs VILTEMPID + LAT/LONG columns).");
+        throw new Error("Master file must have LAT and LONG columns with site coordinates (e.g. ALL CIRCLES NOMINAL).");
+      }
       const latColName = origHeaders[iLat] || "LAT";
       const lngColName = origHeaders[iLng] || "LONG";
       const sites = [];
@@ -429,6 +433,7 @@ export default function SiteVisit() {
       const iResolved = ci("problem resolved", "resolved", "problem");
       const iType     = ci("type of site", "type", "site type");
       if (iNominal === -1) throw new Error("No 'Nominal' column found in OD Operation file");
+      if (!odOpMasterSites.length) throw new Error("Upload the ALL CIRCLES NOMINAL master file first (Step 1 above) — needed to look up site coordinates.");
       const parsed = [];
       for (let i = 1; i < rows.length; i++) {
         const r = rows[i];
@@ -453,7 +458,6 @@ export default function SiteVisit() {
           matched: !!matchedSite });
       }
       if (!parsed.length) throw new Error("No valid rows found in OD Operation file");
-      if (!odOpMasterSites.length) throw new Error("Upload the OD Operation master file first (ALL CIRCLES NOMINAL)");
       setOdOpResults(parsed);
       setOdOpFileName(file.name);
     } catch (err) {
@@ -1113,8 +1117,13 @@ export default function SiteVisit() {
             {odOpMasterError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpMasterError}</div>}
           </div>
           {/* Step B: OD Operation Form */}
-          <div style={{ opacity:odOpMasterFileName?1:0.45, pointerEvents:odOpMasterFileName?"auto":"none" }}>
+          <div>
             <div style={{ fontSize:11.5,fontWeight:700,color:T.grey500,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em" }}>Step 2 — Upload OD Operation Form</div>
+            {!odOpMasterFileName && !odOpFileName && (
+              <div style={{ marginBottom:6,fontSize:11.5,color:"#b45309",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:6,padding:"6px 10px" }}>
+                Upload the master file (Step 1) first — needed to look up site coordinates
+              </div>
+            )}
             {odOpFileName ? (
               <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
                 <div style={{ flex:1,minWidth:0 }}>
@@ -1124,8 +1133,8 @@ export default function SiteVisit() {
                 <button onClick={clearOdOp} style={{ fontSize:11,padding:"2px 8px",borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}>Clear</button>
               </div>
             ) : (
-              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:odOpMasterFileName?"pointer":"not-allowed",background:"#fafafa" }}
-                onMouseEnter={(e)=>{if(odOpMasterFileName){e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}}
+              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
                 onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
                 <FolderOpen size={16} color={T.grey500}/>
                 <div style={{ flex:1 }}>
