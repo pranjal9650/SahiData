@@ -118,7 +118,7 @@ function parseLLSheet(ws, map) {
   const origHeaders = rows[0].map((h) => String(h || "").trim());
   const headers = origHeaders.map((h) => h.toLowerCase().replace(/\r?\n/g, " "));
   const ci    = makeCi(headers);
-  const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid", "viltempid", "vil temp id", "nominal");
+  const iId   = ci("sts site id", "stpl site id", "site id", "siteid", "site_id", "temp siteid");
   const iName = ci("site name", "sitename", "site_name", "name");
   const iCirc = ci("circle name", "circle");
   const iDist = ci("district");
@@ -233,6 +233,11 @@ export default function SiteVisit() {
   const odFileRef = useRef(null);
 
   /* ── OD Operation Form state ────────────────────────────────── */
+  const [odOpMasterSites, setOdOpMasterSites]     = useState([]);
+  const [odOpMasterFileName, setOdOpMasterFileName] = useState("");
+  const [odOpMasterParsing, setOdOpMasterParsing] = useState(false);
+  const [odOpMasterError, setOdOpMasterError]     = useState("");
+  const odOpMasterRef = useRef(null);
   const [odOpResults, setOdOpResults]   = useState([]);
   const [odOpFileName, setOdOpFileName] = useState("");
   const [odOpParsing, setOdOpParsing]   = useState(false);
@@ -356,6 +361,54 @@ export default function SiteVisit() {
     setOdRows([]); setOdFileName(""); setOdUploadedAt(""); setOdError("");
   }
 
+  /* ── Upload & parse OD Operation Master File ────────────────── */
+  async function handleOdOpMasterUpload(file) {
+    if (!file) return;
+    setOdOpMasterParsing(true);
+    setOdOpMasterError("");
+    try {
+      const buf  = await file.arrayBuffer();
+      const wb   = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (rows.length < 2) throw new Error("File has no data rows");
+      const origHeaders = rows[0].map(h => String(h || "").trim());
+      const headers = origHeaders.map(h => h.toLowerCase());
+      const ci = makeCi(headers);
+      const iId   = ci("viltempid", "vil temp id", "nominal", "stpl site id", "site id", "siteid");
+      const iName = ci("sitename", "site name", "name");
+      const iLat  = ci("lat", "latitude");
+      const iLng  = ci("long", "lng", "longitude");
+      if (iId === -1)  throw new Error("No site ID column found (expected: VILTEMPID, Nominal, or Site ID)");
+      if (iLat === -1 || iLng === -1) throw new Error("No LAT/LONG columns found");
+      const latColName = origHeaders[iLat] || "LAT";
+      const lngColName = origHeaders[iLng] || "LONG";
+      const sites = [];
+      for (let i = 1; i < rows.length; i++) {
+        const r   = rows[i];
+        const id  = String(r[iId] || "").trim();
+        const lat = parseFloat(r[iLat]), lng = parseFloat(r[iLng]);
+        if (!id || isNaN(lat) || isNaN(lng) || !lat || !lng) continue;
+        if (lat < 6 || lat > 38 || lng < 60 || lng > 100) continue;
+        sites.push({ stsId: id, name: String(r[iName] || "").trim(), lat, lng,
+          masterRowNum: i + 1, masterFileName: file.name, latColName, lngColName });
+      }
+      if (!sites.length) throw new Error("No valid sites with coordinates found");
+      setOdOpMasterSites(sites);
+      setOdOpMasterFileName(file.name);
+      setOdOpResults([]); setOdOpFileName(""); // clear form if master changes
+    } catch (err) {
+      setOdOpMasterError(err.message);
+    }
+    setOdOpMasterParsing(false);
+    if (odOpMasterRef.current) odOpMasterRef.current.value = "";
+  }
+
+  function clearOdOpMaster() {
+    setOdOpMasterSites([]); setOdOpMasterFileName(""); setOdOpMasterError("");
+    setOdOpResults([]); setOdOpFileName("");
+  }
+
   /* ── Upload & parse OD Operation Form ───────────────────────── */
   async function handleOdOpUpload(file) {
     if (!file) return;
@@ -388,15 +441,19 @@ export default function SiteVisit() {
         const resolved  = iResolved !== -1 ? String(r[iResolved] || "").trim() : "";
         const siteType  = iType     !== -1 ? String(r[iType]     || "").trim() : "";
         const norm = nominal.toLowerCase();
-        const matchedSite = masterSites.find(s =>
+        const matchedSite = odOpMasterSites.find(s =>
           (s.stsId && s.stsId.trim().toLowerCase() === norm) ||
           (s.name  && s.name.trim().toLowerCase()  === norm));
         parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
           siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
           siteLat: matchedSite?.lat ?? null, siteLng: matchedSite?.lng ?? null,
+          masterRowNum: matchedSite?.masterRowNum ?? null,
+          masterFileName: matchedSite?.masterFileName || "",
+          latColName: matchedSite?.latColName || "", lngColName: matchedSite?.lngColName || "",
           matched: !!matchedSite });
       }
       if (!parsed.length) throw new Error("No valid rows found in OD Operation file");
+      if (!odOpMasterSites.length) throw new Error("Upload the OD Operation master file first (ALL CIRCLES NOMINAL)");
       setOdOpResults(parsed);
       setOdOpFileName(file.name);
     } catch (err) {
@@ -749,21 +806,22 @@ export default function SiteVisit() {
 
     // OD Operation Form GPS verification — match each Nominal site's lat/lng against employee GPS pings
     const odOpRows = odOpResults.map((opRow, idx) => {
-      if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "Site not in master" };
-      if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "Site has no GPS in master" };
+      if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site not in master" };
+      if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site has no GPS in master" };
       const normUser = (opRow.userName || "").toLowerCase();
       let personPings = [];
       for (const [key, pings] of allPings) {
         if (key === normUser || key.includes(normUser) || normUser.includes(key)) personPings.push(...pings);
       }
-      if (!personPings.length) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "No GPS data for person" };
-      let minDist = Infinity;
+      if (!personPings.length) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "No GPS data for person" };
+      let minDist = Infinity, closestPing = null;
       for (const p of personPings) {
         const d = haversineMeters(p.lat, p.lng, opRow.siteLat, opRow.siteLng);
-        if (d < minDist) minDist = d;
+        if (d < minDist) { minDist = d; closestPing = p; }
       }
       const gpsVerified = minDist <= TOLERANCE;
-      return { ...opRow, rowNum: idx + 1, gpsVerified, gpsDist: Math.round(minDist), gpsStatus: gpsVerified ? "GPS Verified" : `GPS too far (${Math.round(minDist)} m)` };
+      return { ...opRow, rowNum: idx + 1, gpsVerified, gpsDist: Math.round(minDist), closestPing,
+        gpsStatus: gpsVerified ? "Site Visited" : `GPS too far (${Math.round(minDist)} m)` };
     });
 
     const names = [...new Set(
@@ -1014,47 +1072,72 @@ export default function SiteVisit() {
       </div>
 
       {/* ── OD Operation Form ────────────────────────────────────── */}
-      <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
+      <div style={card}>
         <div style={cardHeader}>
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <p style={cardTitle}>Upload OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
-          </div>
-          {odOpFileName && (
-            <div style={{ display:"flex",alignItems:"center",gap:8 }}>
-              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>
-                ✔ {odOpResults.length} records
-              </span>
-              <button onClick={clearOdOp} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+          <p style={cardTitle}>OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
+          <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+            {odOpMasterFileName && <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>✔ Master: {odOpMasterSites.length} sites</span>}
+            {odOpFileName && <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>✔ Form: {odOpResults.length} records</span>}
+            {(odOpMasterFileName || odOpFileName) && (
+              <button onClick={()=>{clearOdOpMaster();clearOdOp();}} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
                 onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
-                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
-                Clear
-              </button>
-            </div>
-          )}
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>Clear All</button>
+            )}
+          </div>
         </div>
-        <div style={{ padding:"16px 20px" }}>
-          {odOpFileName ? (
-            <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
-              <div style={{ flex:1,minWidth:0 }}>
-                <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpFileName}</div>
-                <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpResults.length} operation records loaded · Upload GPS files and click Match All to verify</div>
+        <div style={{ padding:"16px 20px",display:"flex",flexDirection:"column",gap:12 }}>
+          {/* Step A: Master file */}
+          <div>
+            <div style={{ fontSize:11.5,fontWeight:700,color:T.grey500,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em" }}>Step 1 — Upload OD Operation Master File (e.g. ALL CIRCLES NOMINAL)</div>
+            {odOpMasterFileName ? (
+              <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpMasterFileName}</div>
+                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpMasterSites.length} sites with coordinates</div>
+                </div>
+                <button onClick={clearOdOpMaster} style={{ fontSize:11,padding:"2px 8px",borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}>Clear</button>
               </div>
-            </div>
-          ) : (
-            <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
-              onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
-              onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
-              <FolderOpen size={18} color={T.grey500}/>
-              <div style={{ flex:1 }}>
-                <div style={{ fontSize:13,fontWeight:600,color:T.black }}>{odOpParsing ? "Parsing file…" : "Click to choose OD Operation file"}</div>
-                <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls — must have a Nominal column with site IDs</div>
+            ) : (
+              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
+                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+                <FolderOpen size={16} color={T.grey500}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12.5,fontWeight:600,color:T.black }}>{odOpMasterParsing ? "Parsing…" : "Click to choose master file"}</div>
+                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>Must have VILTEMPID/Nominal, LAT, LONG columns</div>
+                </div>
+                <input ref={odOpMasterRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                  onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpMasterUpload(f); }}/>
+              </label>
+            )}
+            {odOpMasterError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpMasterError}</div>}
+          </div>
+          {/* Step B: OD Operation Form */}
+          <div style={{ opacity:odOpMasterFileName?1:0.45, pointerEvents:odOpMasterFileName?"auto":"none" }}>
+            <div style={{ fontSize:11.5,fontWeight:700,color:T.grey500,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em" }}>Step 2 — Upload OD Operation Form</div>
+            {odOpFileName ? (
+              <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpFileName}</div>
+                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpResults.length} records · Upload GPS files below and click Match All to see results</div>
+                </div>
+                <button onClick={clearOdOp} style={{ fontSize:11,padding:"2px 8px",borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}>Clear</button>
               </div>
-              <Upload size={14} color={T.grey500}/>
-              <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
-                onChange={(e) => { const f = e.target.files[0]; if (f) handleOdOpUpload(f); }}/>
-            </label>
-          )}
-          {odOpError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
+            ) : (
+              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:odOpMasterFileName?"pointer":"not-allowed",background:"#fafafa" }}
+                onMouseEnter={(e)=>{if(odOpMasterFileName){e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}}
+                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+                <FolderOpen size={16} color={T.grey500}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:12.5,fontWeight:600,color:T.black }}>{odOpParsing ? "Parsing…" : "Click to choose OD Operation form"}</div>
+                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>Must have Nominal column with site IDs</div>
+                </div>
+                <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                  onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpUpload(f); }}/>
+              </label>
+            )}
+            {odOpError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
+          </div>
         </div>
       </div>
 
@@ -1311,7 +1394,7 @@ export default function SiteVisit() {
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#0369a1" }}>
-                  {["#","Person","Nominal (Site ID)","Site Name","Circle","Type","Incident Remark","Resolved","Time/Date","GPS Status"].map(h=>(
+                  {["#","Person","Nominal (Site ID)","Site Name","Employee GPS → Master GPS","Match Source","Gap","Time/Date","Incident Remark","Resolved","Status"].map(h=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -1322,12 +1405,29 @@ export default function SiteVisit() {
                     onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
                     onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
                     <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{idx+1}</td>
-                    <td style={{ padding:"10px 13px",fontWeight:600 }}>{r.userName||"—"}</td>
+                    <td style={{ padding:"10px 13px",fontWeight:600,whiteSpace:"nowrap" }}>{r.userName||"—"}</td>
                     <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
-                    <td style={{ padding:"10px 13px" }}>{r.siteName||"—"}</td>
-                    <td style={{ padding:"10px 13px",color:T.grey500 }}>{r.circle||"—"}</td>
-                    <td style={{ padding:"10px 13px",color:T.grey500 }}>{r.siteType||"—"}</td>
-                    <td style={{ padding:"10px 13px" }}>{r.remark||"—"}</td>
+                    <td style={{ padding:"10px 13px",fontSize:12 }}>{r.siteName||"—"}</td>
+                    <td style={{ padding:"10px 13px",fontSize:11.5 }}>
+                      {r.gpsVerified && r.closestPing ? (
+                        <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
+                          <span style={{ color:T.blue,fontFamily:"monospace" }}>{r.closestPing.lat.toFixed(5)}, {r.closestPing.lng.toFixed(5)}</span>
+                          <span style={{ color:T.green,fontFamily:"monospace" }}>{r.siteLat?.toFixed(5)}, {r.siteLng?.toFixed(5)}</span>
+                        </div>
+                      ) : r.matched ? <span style={{ color:T.grey500,fontSize:11 }}>No GPS ping near site</span> : "—"}
+                    </td>
+                    <td style={{ padding:"10px 13px",fontSize:11,color:T.grey500 }}>
+                      {r.matched && r.masterFileName ? `${r.masterFileName} · Row ${r.masterRowNum} · ${r.latColName}/${r.lngColName}` : "—"}
+                    </td>
+                    <td style={{ padding:"10px 13px" }}>
+                      {r.gpsDist != null
+                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.gpsVerified?T.blueBg:T.redLight,color:r.gpsVerified?T.blue:T.red }}>
+                            {r.gpsDist < 1000 ? r.gpsDist + " m" : (r.gpsDist/1000).toFixed(1) + " km"}
+                          </span>
+                        : "—"}
+                    </td>
+                    <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{r.timeStr||"—"}</td>
+                    <td style={{ padding:"10px 13px",fontSize:12 }}>{r.remark||"—"}</td>
                     <td style={{ padding:"10px 13px" }}>
                       <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,
                         background:r.resolved?.toLowerCase()==="yes"?"rgba(21,128,61,0.08)":"rgba(220,38,38,0.08)",
@@ -1335,12 +1435,11 @@ export default function SiteVisit() {
                         {r.resolved||"—"}
                       </span>
                     </td>
-                    <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{r.timeStr||"—"}</td>
                     <td style={{ padding:"10px 13px" }}>
                       {!r.matched
-                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ {r.gpsStatus}</span>
+                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ Not in Master</span>
                         : r.gpsVerified
-                          ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(21,128,61,0.08)",color:T.green }}>✔ GPS Verified ({r.gpsDist<1000?r.gpsDist+" m":(r.gpsDist/1000).toFixed(1)+" km"})</span>
+                          ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(21,128,61,0.08)",color:T.green }}>✔ Site Visited</span>
                           : <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ {r.gpsStatus}</span>}
                     </td>
                   </tr>
