@@ -632,7 +632,7 @@ export default function SiteVisit() {
           matched:         false,
           odVerified:      false,
           status:          "OD Submitted — site not in GPS file",
-          odMismatchReason: "OD form submitted & site found in master — no GPS visit recorded for this site",
+          odMismatchReason: "Site verified in OD form — not found in GPS tracker file",
           odSurveyLat:     odData.surveyLat,
           odSurveyLng:     odData.surveyLng,
         });
