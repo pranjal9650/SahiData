@@ -232,6 +232,13 @@ export default function SiteVisit() {
   const [odError, setOdError]       = useState("");
   const odFileRef = useRef(null);
 
+  /* ── OD Operation Form state ────────────────────────────────── */
+  const [odOpResults, setOdOpResults]   = useState([]);
+  const [odOpFileName, setOdOpFileName] = useState("");
+  const [odOpParsing, setOdOpParsing]   = useState(false);
+  const [odOpError, setOdOpError]       = useState("");
+  const odOpRef = useRef(null);
+
   /* ── Reports / queue state ───────────────────────────────────── */
   const [reports, setReports]           = useState(() =>
     JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]")
@@ -347,6 +354,71 @@ export default function SiteVisit() {
 
   function clearOdSurvey() {
     setOdRows([]); setOdFileName(""); setOdUploadedAt(""); setOdError("");
+  }
+
+  /* ── Upload & parse OD Operation Form ───────────────────────── */
+  async function handleOdOpUpload(file) {
+    if (!file) return;
+    setOdOpParsing(true);
+    setOdOpError("");
+    try {
+      const buf  = await file.arrayBuffer();
+      const wb   = XLSX.read(new Uint8Array(buf), { type: "array" });
+      const ws   = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+      if (rows.length < 2) throw new Error("OD Operation file has no data rows");
+      const headers = rows[0].map(h => String(h || "").trim().toLowerCase().replace(/\r?\n/g, " "));
+      const ci = makeCi(headers);
+      const iNominal  = ci("nominal", "stpl site id", "site id", "siteid");
+      const iUser     = ci("user name", "username", "created user", "createduser", "employee", "person");
+      const iTime     = ci("time/date", "time", "date", "createddate", "timestamp");
+      const iRemark   = ci("incident remark", "remark", "reason of visit", "reason");
+      const iResolved = ci("problem resolved", "resolved", "problem");
+      const iType     = ci("type of site", "type", "site type");
+      if (iNominal === -1) throw new Error("No 'Nominal' column found in OD Operation file");
+      const parsed = [];
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        if (!r.some(c => String(c || "").trim())) continue;
+        const nominal = String(r[iNominal] || "").trim();
+        if (!nominal || nominal.toLowerCase() === "nan") continue;
+        const userName  = iUser     !== -1 ? String(r[iUser]     || "").trim() : "";
+        const timeStr   = iTime     !== -1 ? String(r[iTime]     || "").trim() : "";
+        const remark    = iRemark   !== -1 ? String(r[iRemark]   || "").trim() : "";
+        const resolved  = iResolved !== -1 ? String(r[iResolved] || "").trim() : "";
+        const siteType  = iType     !== -1 ? String(r[iType]     || "").trim() : "";
+        const norm = nominal.toLowerCase();
+        const matchedSite = masterSites.find(s => s.stsId && s.stsId.trim().toLowerCase() === norm);
+        parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
+          siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
+          matched: !!matchedSite });
+      }
+      if (!parsed.length) throw new Error("No valid rows found in OD Operation file");
+      setOdOpResults(parsed);
+      setOdOpFileName(file.name);
+    } catch (err) {
+      setOdOpError(err.message);
+    }
+    setOdOpParsing(false);
+    if (odOpRef.current) odOpRef.current.value = "";
+  }
+
+  function clearOdOp() {
+    setOdOpResults([]); setOdOpFileName(""); setOdOpError("");
+  }
+
+  function downloadOdOpExcel() {
+    if (!odOpResults.length) return;
+    const hdrs = ["#","Person","Nominal (Site ID)","Site Name","Circle","Type of Site","Incident Remark","Problem Resolved","Time/Date","Status"];
+    const data = odOpResults.map((r, i) => [
+      i + 1, r.userName, r.nominal, r.siteName, r.circle, r.siteType,
+      r.remark, r.resolved, r.timeStr,
+      r.matched ? "Site Found in Master" : "Site Not in Master",
+    ]);
+    const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
+    const xlWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(xlWb, xlWs, "OD Operation");
+    XLSX.writeFile(xlWb, "OD_Operation_Verified.xlsx");
   }
 
   /* ── Persist reports ─────────────────────────────────────────── */
@@ -883,6 +955,89 @@ export default function SiteVisit() {
             </label>
           )}
           {odError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odError}</div>}
+        </div>
+      </div>
+
+      {/* ── OD Operation Form ────────────────────────────────────── */}
+      <div style={{ ...card, opacity:masterReady?1:0.5, pointerEvents:masterReady?"auto":"none" }}>
+        <div style={cardHeader}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <p style={cardTitle}>Upload OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
+          </div>
+          {odOpFileName && (
+            <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>
+                ✔ {odOpResults.length} records
+              </span>
+              <button onClick={downloadOdOpExcel} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.blue,cursor:"pointer" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.blue;}}
+                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;}}>
+                ↓ Download Excel
+              </button>
+              <button onClick={clearOdOp} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
+                Clear
+              </button>
+            </div>
+          )}
+        </div>
+        <div style={{ padding:"16px 20px" }}>
+          {!odOpFileName ? (
+            <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
+              onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
+              onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+              <FolderOpen size={18} color={T.grey500}/>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,fontWeight:600,color:T.black }}>{odOpParsing ? "Parsing file…" : "Click to choose OD Operation file"}</div>
+                <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls — must have a Nominal column with site IDs</div>
+              </div>
+              <Upload size={14} color={T.grey500}/>
+              <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                onChange={(e) => { const f = e.target.files[0]; if (f) handleOdOpUpload(f); }}/>
+            </label>
+          ) : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12.5 }}>
+                <thead>
+                  <tr style={{ background:"#0369a1" }}>
+                    {["#","Person","Nominal (Site ID)","Site Name","Circle","Type","Incident Remark","Resolved","Time/Date","Status"].map(h => (
+                      <th key={h} style={{ padding:"8px 12px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {odOpResults.map((r, idx) => (
+                    <tr key={idx} style={{ borderBottom:`1px solid ${T.border}`,background:r.matched?"#fff":"rgba(220,38,38,0.03)" }}
+                      onMouseEnter={(e)=>(e.currentTarget.style.background=r.matched?"#f9fafb":"rgba(220,38,38,0.07)")}
+                      onMouseLeave={(e)=>(e.currentTarget.style.background=r.matched?"#fff":"rgba(220,38,38,0.03)")}>
+                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{idx+1}</td>
+                      <td style={{ padding:"9px 12px",fontWeight:600 }}>{r.userName||"—"}</td>
+                      <td style={{ padding:"9px 12px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
+                      <td style={{ padding:"9px 12px" }}>{r.siteName||"—"}</td>
+                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{r.circle||"—"}</td>
+                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{r.siteType||"—"}</td>
+                      <td style={{ padding:"9px 12px" }}>{r.remark||"—"}</td>
+                      <td style={{ padding:"9px 12px" }}>
+                        <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,
+                          background:r.resolved?.toLowerCase()==="yes"?"rgba(21,128,61,0.08)":"rgba(220,38,38,0.08)",
+                          color:r.resolved?.toLowerCase()==="yes"?T.green:T.red }}>
+                          {r.resolved||"—"}
+                        </span>
+                      </td>
+                      <td style={{ padding:"9px 12px",color:T.grey500,whiteSpace:"nowrap",fontSize:12 }}>{r.timeStr||"—"}</td>
+                      <td style={{ padding:"9px 12px" }}>
+                        {r.matched
+                          ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(21,128,61,0.08)",color:T.green }}>✔ Found in Master</span>
+                          : <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ Not in Master</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {odOpError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
         </div>
       </div>
 
