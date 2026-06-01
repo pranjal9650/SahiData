@@ -393,6 +393,7 @@ export default function SiteVisit() {
           (s.name  && s.name.trim().toLowerCase()  === norm));
         parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
           siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
+          siteLat: matchedSite?.lat ?? null, siteLng: matchedSite?.lng ?? null,
           matched: !!matchedSite });
       }
       if (!parsed.length) throw new Error("No valid rows found in OD Operation file");
@@ -533,6 +534,7 @@ export default function SiteVisit() {
 
     const resultRows = [];
     let matchedCount = 0;
+    const rawPings = new Map(); // personName.toLowerCase() -> [{lat,lng}]
 
     if (isProductivity) {
       for (let i = headerRowIdx + 1; i < rows.length; i++) {
@@ -547,6 +549,11 @@ export default function SiteVisit() {
         } else if (colCombined !== -1) {
           const coords = extractCoords(r[colCombined]);
           if (coords.length) { rowLat = coords[0].lat; rowLng = coords[0].lng; }
+        }
+        if (rowLat !== null && rowLng !== null) {
+          const key = pName.toLowerCase();
+          if (!rawPings.has(key)) rawPings.set(key, []);
+          rawPings.get(key).push({ lat: rowLat, lng: rowLng });
         }
         let nearestSite = null, nearestDist = Infinity;
         if (rowLat !== null) {
@@ -607,6 +614,9 @@ export default function SiteVisit() {
       const totalPings = [...pingsByPerson.values()].reduce((s, a) => s + a.length, 0);
       if (!totalPings) throw new Error(`${file.name}: no valid GPS coordinates found`);
       for (const [pName, pings] of pingsByPerson) {
+        rawPings.set(pName.toLowerCase(), pings.map(p => ({ lat: p.lat, lng: p.lng })));
+      }
+      for (const [pName, pings] of pingsByPerson) {
         for (const site of masterSites) {
           let nearestDist = Infinity, nearestTime = "", nearestLat = null, nearestLng = null;
           const degTol = TOLERANCE / 111000;
@@ -634,7 +644,7 @@ export default function SiteVisit() {
         }
       }
     }
-    return { resultRows, matchedCount };
+    return { resultRows, matchedCount, rawPings };
   }
 
   /* ── Match all queued entries ────────────────────────────────── */
@@ -672,9 +682,10 @@ export default function SiteVisit() {
 
     const allRows = [];
     let totalMatched = 0;
+    const allPings = new Map(); // personName.toLowerCase() -> [{lat,lng}]
     for (const entry of entries) {
       try {
-        const { resultRows, matchedCount } = await processFile(entry.name, entry.file);
+        const { resultRows, matchedCount, rawPings } = await processFile(entry.name, entry.file);
         // Attach OD verification to each row
         for (const row of resultRows) {
           const key = (row.matchedSiteId || "").toUpperCase();
@@ -686,6 +697,11 @@ export default function SiteVisit() {
         }
         allRows.push(...resultRows);
         totalMatched += matchedCount;
+        // Collect raw GPS pings for OD Operation GPS verification
+        for (const [key, pings] of rawPings) {
+          if (!allPings.has(key)) allPings.set(key, []);
+          allPings.get(key).push(...pings);
+        }
       } catch (err) {
         setUploadMsg({ text: "Error: " + err.message, type: "error" });
         setUploading(false);
@@ -730,6 +746,26 @@ export default function SiteVisit() {
       });
     }
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
+
+    // OD Operation Form GPS verification — match each Nominal site's lat/lng against employee GPS pings
+    const odOpRows = odOpResults.map((opRow, idx) => {
+      if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "Site not in master" };
+      if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "Site has no GPS in master" };
+      const normUser = (opRow.userName || "").toLowerCase();
+      let personPings = [];
+      for (const [key, pings] of allPings) {
+        if (key === normUser || key.includes(normUser) || normUser.includes(key)) personPings.push(...pings);
+      }
+      if (!personPings.length) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, gpsStatus: "No GPS data for person" };
+      let minDist = Infinity;
+      for (const p of personPings) {
+        const d = haversineMeters(p.lat, p.lng, opRow.siteLat, opRow.siteLng);
+        if (d < minDist) minDist = d;
+      }
+      const gpsVerified = minDist <= TOLERANCE;
+      return { ...opRow, rowNum: idx + 1, gpsVerified, gpsDist: Math.round(minDist), gpsStatus: gpsVerified ? "GPS Verified" : `GPS too far (${Math.round(minDist)} m)` };
+    });
+
     const names = [...new Set(
       entries.map((e) => e.name).filter(Boolean).concat(allRows.map((r) => r.personName).filter(Boolean))
     )].slice(0, 5).join(", ");
@@ -741,7 +777,9 @@ export default function SiteVisit() {
       matchedCount: totalMatched,
       totalRows:    allRows.length,
       hasOdSurvey:  odRows.length > 0,
+      hasOdOp:      odOpResults.length > 0,
       rows:         allRows,
+      odOpRows,
     };
     const all = [report, ...reports].slice(0, 20);
     persistReports(all);
@@ -783,6 +821,21 @@ export default function SiteVisit() {
     XLSX.utils.book_append_sheet(xlWb, xlWs, "Verification");
     const safeName = activeReport.fileName.replace(/[^a-zA-Z0-9_\- ]/g, "").trim() || "combined";
     XLSX.writeFile(xlWb, safeName + "_verified.xlsx");
+  }
+
+  function downloadOdOpReport() {
+    if (!activeReport?.odOpRows?.length) return;
+    const hdrs = ["#","Person","Nominal (Site ID)","Site Name","Circle","Type of Site","Incident Remark","Problem Resolved","Time/Date","GPS Status","GPS Distance"];
+    const data = activeReport.odOpRows.map((r, i) => [
+      i + 1, r.userName, r.nominal, r.siteName, r.circle, r.siteType,
+      r.remark, r.resolved, r.timeStr, r.gpsStatus,
+      r.gpsDist != null ? (r.gpsDist < 1000 ? r.gpsDist + " m" : (r.gpsDist / 1000).toFixed(1) + " km") : "—",
+    ]);
+    const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
+    xlWs["!cols"] = [5,20,22,30,14,14,30,14,20,22,14].map(wch => ({ wch }));
+    const xlWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(xlWb, xlWs, "OD Operation");
+    XLSX.writeFile(xlWb, "OD_Operation_GPS_Verified.xlsx");
   }
 
   /* ── Filtered rows ───────────────────────────────────────────── */
@@ -1269,6 +1322,67 @@ export default function SiteVisit() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── OD Operation GPS Results ───────────────────────────────── */}
+      {activeReport?.hasOdOp && activeReport.odOpRows?.length > 0 && (
+        <div style={card}>
+          <div style={cardHeader}>
+            <div>
+              <p style={cardTitle}>OD Operation Form Results</p>
+              <p style={{ margin:"3px 0 0",fontSize:11.5,color:T.grey500 }}>
+                {activeReport.odOpRows.length} entries · {activeReport.odOpRows.filter(r=>r.gpsVerified).length} GPS Verified
+              </p>
+            </div>
+            <button onClick={downloadOdOpReport}
+              style={{ display:"inline-flex",alignItems:"center",gap:6,padding:"7px 14px",borderRadius:8,border:`1px solid ${T.border}`,background:"transparent",color:T.blue,fontSize:13,fontWeight:600,fontFamily:"inherit",cursor:"pointer" }}
+              onMouseEnter={(e)=>{e.currentTarget.style.background=T.blueBg;}}
+              onMouseLeave={(e)=>{e.currentTarget.style.background="transparent";}}>
+              <Download size={13}/> Download Excel
+            </button>
+          </div>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"#0369a1" }}>
+                  {["#","Person","Nominal (Site ID)","Site Name","Circle","Type","Incident Remark","Resolved","Time/Date","GPS Status"].map(h=>(
+                    <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {activeReport.odOpRows.map((r, idx) => (
+                  <tr key={idx} style={{ borderBottom:`1px solid ${T.border}`,background:"transparent" }}
+                    onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
+                    onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
+                    <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{idx+1}</td>
+                    <td style={{ padding:"10px 13px",fontWeight:600 }}>{r.userName||"—"}</td>
+                    <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
+                    <td style={{ padding:"10px 13px" }}>{r.siteName||"—"}</td>
+                    <td style={{ padding:"10px 13px",color:T.grey500 }}>{r.circle||"—"}</td>
+                    <td style={{ padding:"10px 13px",color:T.grey500 }}>{r.siteType||"—"}</td>
+                    <td style={{ padding:"10px 13px" }}>{r.remark||"—"}</td>
+                    <td style={{ padding:"10px 13px" }}>
+                      <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,
+                        background:r.resolved?.toLowerCase()==="yes"?"rgba(21,128,61,0.08)":"rgba(220,38,38,0.08)",
+                        color:r.resolved?.toLowerCase()==="yes"?T.green:T.red }}>
+                        {r.resolved||"—"}
+                      </span>
+                    </td>
+                    <td style={{ padding:"10px 13px",fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{r.timeStr||"—"}</td>
+                    <td style={{ padding:"10px 13px" }}>
+                      {!r.matched
+                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ {r.gpsStatus}</span>
+                        : r.gpsVerified
+                          ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(21,128,61,0.08)",color:T.green }}>✔ GPS Verified ({r.gpsDist<1000?r.gpsDist+" m":(r.gpsDist/1000).toFixed(1)+" km"})</span>
+                          : <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ {r.gpsStatus}</span>}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
