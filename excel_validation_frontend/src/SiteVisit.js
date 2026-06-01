@@ -1024,11 +1024,6 @@ export default function SiteVisit() {
               <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>
                 ✔ {odOpResults.length} records
               </span>
-              <button onClick={downloadOdOpExcel} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.blue,cursor:"pointer" }}
-                onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.blue;}}
-                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;}}>
-                ↓ Download Excel
-              </button>
               <button onClick={clearOdOp} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
                 onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
                 onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>
@@ -1038,7 +1033,14 @@ export default function SiteVisit() {
           )}
         </div>
         <div style={{ padding:"16px 20px" }}>
-          {!odOpFileName ? (
+          {odOpFileName ? (
+            <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpFileName}</div>
+                <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpResults.length} operation records loaded · Upload GPS files and click Match All to verify</div>
+              </div>
+            </div>
+          ) : (
             <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
               onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
               onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
@@ -1051,46 +1053,6 @@ export default function SiteVisit() {
               <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
                 onChange={(e) => { const f = e.target.files[0]; if (f) handleOdOpUpload(f); }}/>
             </label>
-          ) : (
-            <div style={{ overflowX:"auto" }}>
-              <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12.5 }}>
-                <thead>
-                  <tr style={{ background:"#0369a1" }}>
-                    {["#","Person","Nominal (Site ID)","Site Name","Circle","Type","Incident Remark","Resolved","Time/Date","Status"].map(h => (
-                      <th key={h} style={{ padding:"8px 12px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {odOpResults.map((r, idx) => (
-                    <tr key={idx} style={{ borderBottom:`1px solid ${T.border}`,background:r.matched?"#fff":"rgba(220,38,38,0.03)" }}
-                      onMouseEnter={(e)=>(e.currentTarget.style.background=r.matched?"#f9fafb":"rgba(220,38,38,0.07)")}
-                      onMouseLeave={(e)=>(e.currentTarget.style.background=r.matched?"#fff":"rgba(220,38,38,0.03)")}>
-                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{idx+1}</td>
-                      <td style={{ padding:"9px 12px",fontWeight:600 }}>{r.userName||"—"}</td>
-                      <td style={{ padding:"9px 12px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
-                      <td style={{ padding:"9px 12px" }}>{r.siteName||"—"}</td>
-                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{r.circle||"—"}</td>
-                      <td style={{ padding:"9px 12px",color:T.grey500 }}>{r.siteType||"—"}</td>
-                      <td style={{ padding:"9px 12px" }}>{r.remark||"—"}</td>
-                      <td style={{ padding:"9px 12px" }}>
-                        <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,
-                          background:r.resolved?.toLowerCase()==="yes"?"rgba(21,128,61,0.08)":"rgba(220,38,38,0.08)",
-                          color:r.resolved?.toLowerCase()==="yes"?T.green:T.red }}>
-                          {r.resolved||"—"}
-                        </span>
-                      </td>
-                      <td style={{ padding:"9px 12px",color:T.grey500,whiteSpace:"nowrap",fontSize:12 }}>{r.timeStr||"—"}</td>
-                      <td style={{ padding:"9px 12px" }}>
-                        {r.matched
-                          ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(21,128,61,0.08)",color:T.green }}>✔ Found in Master</span>
-                          : <span style={{ padding:"2px 8px",borderRadius:4,fontSize:11.5,fontWeight:600,background:"rgba(220,38,38,0.08)",color:T.red }}>✘ Not in Master</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           )}
           {odOpError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
         </div>
