@@ -712,8 +712,8 @@ export default function SiteVisit() {
           const statusMatch = statusFilter === "3-Way Verified"
             ? (r.matched && r.odVerified)
             : (!statusFilter || r.status === statusFilter);
-          // Default: show GPS-verified rows; "3-Way Verified only" option adds OD requirement
-          const odFilter = activeReportHasOd && !statusFilter ? r.matched : statusMatch;
+          // Default: 3-way verified (GPS + OD); "3-Way Verified only" option is same strict check
+          const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
           return odFilter;
         }
         return false;
@@ -970,7 +970,7 @@ export default function SiteVisit() {
               <div style={{ fontWeight:600,fontSize:13.5,color:T.black }}>{r.fileName}</div>
               <div style={{ fontSize:11.5,color:T.grey500,marginTop:2 }}>{r.uploadedBy} · {r.createdAt} · {r.totalRows} rows</div>
             </div>
-            <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)",whiteSpace:"nowrap" }}>✔ {r.matchedCount} Verified</span>
+            <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)",whiteSpace:"nowrap" }}>✔ {r.hasOdSurvey ? r.rows.filter(row=>row.matched&&row.odVerified).length : r.matchedCount} {r.hasOdSurvey ? "3-Way Verified" : "Verified"}</span>
             <button onClick={(e)=>deleteReport(r.id,e)}
               style={{ width:30,height:30,borderRadius:7,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0 }}
               onMouseEnter={(e)=>{e.currentTarget.style.background=T.redLight;e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
@@ -987,7 +987,7 @@ export default function SiteVisit() {
           <div style={cardHeader}>
             <div>
               <p style={cardTitle}>{activeReport.fileName}</p>
-              <p style={{ margin:"3px 0 0",fontSize:11.5,color:T.grey500 }}>{activeReport.createdAt} · {activeReport.totalRows} rows · {activeReport.matchedCount} verified</p>
+              <p style={{ margin:"3px 0 0",fontSize:11.5,color:T.grey500 }}>{activeReport.createdAt} · {activeReport.totalRows} rows · {activeReportHasOd ? activeReport.rows.filter(row=>row.matched&&row.odVerified).length : activeReport.matchedCount} {activeReportHasOd ? "3-Way Verified" : "verified"}</p>
             </div>
             <div style={{ display:"flex",gap:8 }}>
               <button onClick={downloadExcel}
