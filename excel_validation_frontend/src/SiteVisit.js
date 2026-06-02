@@ -835,25 +835,34 @@ export default function SiteVisit() {
     }
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
 
-    // OD Operation Form GPS verification — all form entries; GPS verified only where pings exist
-    const odOpRows = odOpResults.map((opRow, idx) => {
-      if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site not in master" };
-      if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site has no GPS in master" };
-      const normUser = (opRow.userName || "").toLowerCase();
-      let personPings = [];
-      for (const [key, pings] of allPings) {
-        if (key === normUser || key.includes(normUser) || normUser.includes(key)) personPings.push(...pings);
+    // OD Operation Form GPS verification — only entries for employees whose GPS was uploaded
+    const _hasGps = (userName) => {
+      const normUser = (userName || "").toLowerCase();
+      for (const [key] of allPings) {
+        if (key === normUser || key.includes(normUser) || normUser.includes(key)) return true;
       }
-      if (!personPings.length) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "No GPS data for person" };
-      let minDist = Infinity, closestPing = null;
-      for (const p of personPings) {
-        const d = haversineMeters(p.lat, p.lng, opRow.siteLat, opRow.siteLng);
-        if (d < minDist) { minDist = d; closestPing = p; }
-      }
-      const gpsVerified = minDist <= TOLERANCE;
-      return { ...opRow, rowNum: idx + 1, gpsVerified, gpsDist: Math.round(minDist), closestPing,
-        gpsStatus: gpsVerified ? "Site Visited" : `GPS too far (${Math.round(minDist)} m)` };
-    });
+      return false;
+    };
+    const odOpRows = odOpResults
+      .filter(opRow => _hasGps(opRow.userName))
+      .map((opRow, idx) => {
+        if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site not in master" };
+        if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site has no GPS in master" };
+        const normUser = (opRow.userName || "").toLowerCase();
+        let personPings = [];
+        for (const [key, pings] of allPings) {
+          if (key === normUser || key.includes(normUser) || normUser.includes(key)) personPings.push(...pings);
+        }
+        if (!personPings.length) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "No GPS data for person" };
+        let minDist = Infinity, closestPing = null;
+        for (const p of personPings) {
+          const d = haversineMeters(p.lat, p.lng, opRow.siteLat, opRow.siteLng);
+          if (d < minDist) { minDist = d; closestPing = p; }
+        }
+        const gpsVerified = minDist <= TOLERANCE;
+        return { ...opRow, rowNum: idx + 1, gpsVerified, gpsDist: Math.round(minDist), closestPing,
+          gpsStatus: gpsVerified ? "Site Visited" : `GPS too far (${Math.round(minDist)} m)` };
+      });
 
     const names = [...new Set(
       entries.map((e) => e.name).filter(Boolean).concat(allRows.map((r) => r.personName).filter(Boolean))
