@@ -287,6 +287,12 @@ export default function SiteVisit() {
       localStorage.setItem(CACHE_KEY, JSON.stringify({ masterFiles }));
   }, [masterFiles]);
 
+  /* ── Clear active report when switching tabs ─────────────────── */
+  useEffect(() => {
+    if (activeReport && (activeReport.formType || "od-survey") !== formType)
+      setActiveReport(null);
+  }, [formType]);
+
   /* ── Upload & parse one master file ─────────────────────────── */
   async function handleMasterUpload(file) {
     if (!file) return;
