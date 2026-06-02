@@ -1467,7 +1467,7 @@ export default function SiteVisit() {
           <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
-                <tr style={{ background:"#0369a1" }}>
+                <tr style={{ background:T.red }}>
                   {["#","Person","Nominal (Site ID)","Site Name","Match Source","Gap","Time/Date","Incident Remark","Resolved","Status"].map(h=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
@@ -1480,14 +1480,14 @@ export default function SiteVisit() {
                     onMouseLeave={(e)=>(e.currentTarget.style.background="transparent")}>
                     <td style={{ padding:"10px 13px",color:T.grey500,fontSize:12 }}>{idx+1}</td>
                     <td style={{ padding:"10px 13px",fontWeight:600,whiteSpace:"nowrap" }}>{r.userName||"—"}</td>
-                    <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
+                    <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.red,fontWeight:600 }}>{r.nominal}</td>
                     <td style={{ padding:"10px 13px",fontSize:12 }}>{r.siteName||"—"}</td>
                     <td style={{ padding:"10px 13px",fontSize:11,color:T.grey500 }}>
                       {r.matched && r.masterFileName ? `${r.masterFileName} · Row ${r.masterRowNum} · ${r.latColName}/${r.lngColName}` : "—"}
                     </td>
                     <td style={{ padding:"10px 13px" }}>
                       {r.gpsDist != null
-                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.gpsVerified?T.blueBg:T.redLight,color:r.gpsVerified?T.blue:T.red }}>
+                        ? <span style={{ padding:"2px 8px",borderRadius:4,fontSize:12,fontWeight:600,background:r.gpsVerified?T.greenBg:T.redLight,color:r.gpsVerified?T.green:T.red }}>
                             {r.gpsDist < 1000 ? r.gpsDist + " m" : (r.gpsDist/1000).toFixed(1) + " km"}
                           </span>
                         : "—"}
