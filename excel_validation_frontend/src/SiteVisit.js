@@ -752,17 +752,19 @@ export default function SiteVisit() {
     for (const entry of entries) {
       try {
         const { resultRows, matchedCount, rawPings } = await processFile(entry.name, entry.file);
-        // Attach OD verification to each row
-        for (const row of resultRows) {
-          const key = (row.matchedSiteId || "").toUpperCase();
-          const od  = odSiteMap.get(key);
-          row.odVerified   = !!od;
-          row.odSurveyLat  = od?.surveyLat  ?? null;
-          row.odSurveyLng  = od?.surveyLng  ?? null;
-          row.odSurveyDist = od?.distToSite ?? null;
+        if (formType !== "od-operation") {
+          // Attach OD Survey verification to each row and add to main GPS table
+          for (const row of resultRows) {
+            const key = (row.matchedSiteId || "").toUpperCase();
+            const od  = odSiteMap.get(key);
+            row.odVerified   = !!od;
+            row.odSurveyLat  = od?.surveyLat  ?? null;
+            row.odSurveyLng  = od?.surveyLng  ?? null;
+            row.odSurveyDist = od?.distToSite ?? null;
+          }
+          allRows.push(...resultRows);
+          totalMatched += matchedCount;
         }
-        allRows.push(...resultRows);
-        totalMatched += matchedCount;
         // Collect raw GPS pings for OD Operation GPS verification
         for (const [key, pings] of rawPings) {
           if (!allPings.has(key)) allPings.set(key, []);
@@ -843,8 +845,9 @@ export default function SiteVisit() {
       createdAt:    new Date().toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }),
       matchedCount: totalMatched,
       totalRows:    allRows.length,
-      hasOdSurvey:  odRows.length > 0,
+      hasOdSurvey:  formType !== "od-operation" && odRows.length > 0,
       hasOdOp:      odOpResults.length > 0,
+      formType,
       rows:         allRows,
       odOpRows,
     };
@@ -1338,7 +1341,7 @@ export default function SiteVisit() {
             </div>
           </div>
 
-          <div style={{ padding:"12px 20px",borderBottom:`1px solid ${T.border}`,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center" }}>
+          {activeReport.formType !== "od-operation" && <div style={{ padding:"12px 20px",borderBottom:`1px solid ${T.border}`,display:"flex",gap:10,flexWrap:"wrap",alignItems:"center" }}>
             <div style={{ flex:1,minWidth:200,position:"relative",display:"flex",alignItems:"center" }}>
               <Search size={14} color={T.grey500} style={{ position:"absolute",left:10,pointerEvents:"none" }}/>
               <input type="text" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search name, site, district…"
@@ -1351,9 +1354,9 @@ export default function SiteVisit() {
               {activeReportHasOd && <option value="3-Way Verified">3-Way Verified only</option>}
             </select>
             <span style={{ fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{displayRows.length} of {activeReport.rows.length} rows</span>
-          </div>
+          </div>}
 
-          <div style={{ overflowX:"auto" }}>
+          {activeReport.formType !== "od-operation" && <div style={{ overflowX:"auto" }}>
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:T.red }}>
@@ -1435,7 +1438,7 @@ export default function SiteVisit() {
                 })}
               </tbody>
             </table>
-          </div>
+          </div>}
         </div>
       )}
 
