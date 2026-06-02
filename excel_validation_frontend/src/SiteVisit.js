@@ -1107,79 +1107,105 @@ export default function SiteVisit() {
       </>} {/* end od-survey flow */}
 
       {/* ── OD Operation flow ────────────────────────────────────── */}
-      {formType === "od-operation" && <div style={card}>
+      {formType === "od-operation" && <>
+
+      {/* OD Op Step 1: Master file */}
+      <div style={card}>
         <div style={cardHeader}>
-          <p style={cardTitle}>OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
-          <div style={{ display:"flex",alignItems:"center",gap:8 }}>
-            {odOpMasterFileName && <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>✔ Master: {odOpMasterSites.length} sites</span>}
-            {odOpFileName && <span style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:99,background:"rgba(14,165,233,0.08)",color:"#0369a1",border:"1px solid rgba(14,165,233,0.25)" }}>✔ Form: {odOpResults.length} records</span>}
-            {(odOpMasterFileName || odOpFileName) && (
-              <button onClick={()=>{clearOdOpMaster();clearOdOp();}} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:T.red,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>1</span>
+            <p style={cardTitle}>Upload OD Operation Master File</p>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            {odOpMasterFileName && (
+              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.greenBg,color:T.green,border:"1px solid rgba(21,128,61,0.2)" }}>
+                ✔ {odOpMasterSites.length} sites loaded
+              </span>
+            )}
+            {odOpMasterFileName && (
+              <button onClick={clearOdOpMaster} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
                 onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
-                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>Clear All</button>
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>Clear</button>
             )}
           </div>
         </div>
-        <div style={{ padding:"16px 20px",display:"flex",flexDirection:"column",gap:12 }}>
-          {/* Step A: Master file */}
-          <div>
-            <div style={{ fontSize:11.5,fontWeight:700,color:T.grey500,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em" }}>Step 1 — Upload OD Operation Master File (e.g. ALL CIRCLES NOMINAL)</div>
-            {odOpMasterFileName ? (
-              <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
-                <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpMasterFileName}</div>
-                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpMasterSites.length} sites with coordinates</div>
-                </div>
-                <button onClick={clearOdOpMaster} style={{ fontSize:11,padding:"2px 8px",borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}>Clear</button>
-              </div>
-            ) : (
-              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa" }}
-                onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
-                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
-                <FolderOpen size={16} color={T.grey500}/>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:12.5,fontWeight:600,color:T.black }}>{odOpMasterParsing ? "Parsing…" : "Click to choose master file"}</div>
-                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>Must have VILTEMPID/Nominal, LAT, LONG columns</div>
-                </div>
-                <input ref={odOpMasterRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
-                  onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpMasterUpload(f); }}/>
-              </label>
-            )}
-            {odOpMasterError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpMasterError}</div>}
+        <div style={{ padding:"16px 20px" }}>
+          <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.blue}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:14 }}>
+            Upload the master file (e.g. <strong>ALL CIRCLES NOMINAL</strong>) with <strong>VILTEMPID/Nominal, LAT, LONG</strong> columns. Site coordinates will be looked up from here.
           </div>
-          {/* Step B: OD Operation Form */}
-          <div>
-            <div style={{ fontSize:11.5,fontWeight:700,color:T.grey500,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em" }}>Step 2 — Upload OD Operation Form</div>
-            {!odOpMasterFileName && !odOpFileName && (
-              <div style={{ marginBottom:6,fontSize:11.5,color:"#b45309",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.25)",borderRadius:6,padding:"6px 10px" }}>
-                Upload the master file (Step 1) first — needed to look up site coordinates
+          {odOpMasterFileName ? (
+            <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:T.greenBg,border:"1px solid rgba(21,128,61,0.2)",borderRadius:8 }}>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:12.5,fontWeight:600,color:T.green,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpMasterFileName}</div>
+                <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpMasterSites.length} sites with coordinates</div>
               </div>
-            )}
-            {odOpFileName ? (
-              <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:"rgba(14,165,233,0.06)",border:"1px solid rgba(14,165,233,0.2)",borderRadius:8 }}>
-                <div style={{ flex:1,minWidth:0 }}>
-                  <div style={{ fontSize:12.5,fontWeight:600,color:"#0369a1",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpFileName}</div>
-                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpResults.length} records · Upload GPS files below and click Match All to see results</div>
-                </div>
-                <button onClick={clearOdOp} style={{ fontSize:11,padding:"2px 8px",borderRadius:5,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}>Clear</button>
+            </div>
+          ) : (
+            <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa",transition:"all 0.15s" }}
+              onMouseEnter={(e)=>{e.currentTarget.style.borderColor=T.blue;e.currentTarget.style.background=T.blueBg;}}
+              onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+              <FolderOpen size={18} color={T.grey500}/>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,fontWeight:600,color:T.black }}>{odOpMasterParsing ? "Parsing file…" : "Click to choose master file"}</div>
+                <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls / .csv — must have VILTEMPID/Nominal + LAT + LONG columns</div>
               </div>
-            ) : (
-              <label style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:"pointer",background:"#fafafa" }}
-                onMouseEnter={(e)=>{e.currentTarget.style.borderColor="#0ea5e9";e.currentTarget.style.background="rgba(14,165,233,0.04)";}}
-                onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
-                <FolderOpen size={16} color={T.grey500}/>
-                <div style={{ flex:1 }}>
-                  <div style={{ fontSize:12.5,fontWeight:600,color:T.black }}>{odOpParsing ? "Parsing…" : "Click to choose OD Operation form"}</div>
-                  <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>Must have Nominal column with site IDs</div>
-                </div>
-                <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
-                  onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpUpload(f); }}/>
-              </label>
-            )}
-            {odOpError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
-          </div>
+              <Upload size={14} color={T.grey500}/>
+              <input ref={odOpMasterRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpMasterUpload(f); }}/>
+            </label>
+          )}
+          {odOpMasterError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpMasterError}</div>}
         </div>
-      </div>} {/* end od-operation flow */}
+      </div>
+
+      {/* OD Op Step 2: OD Operation Form */}
+      <div style={{ ...card, opacity:odOpMasterFileName?1:0.5, pointerEvents:odOpMasterFileName?"auto":"none" }}>
+        <div style={cardHeader}>
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ width:22,height:22,borderRadius:"50%",background:odOpMasterFileName?T.blue:T.grey500,color:T.white,display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,flexShrink:0 }}>2</span>
+            <p style={cardTitle}>Upload OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
+          </div>
+          {odOpFileName && (
+            <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+              <span style={{ fontSize:12,fontWeight:600,padding:"3px 10px",borderRadius:99,background:T.blueBg,color:T.blue,border:"1px solid rgba(14,165,233,0.25)" }}>
+                ✔ {odOpResults.length} records
+              </span>
+              <button onClick={clearOdOp} style={{ fontSize:11.5,fontWeight:600,padding:"3px 10px",borderRadius:6,border:`1px solid ${T.border}`,background:"transparent",color:T.grey500,cursor:"pointer" }}
+                onMouseEnter={(e)=>{e.currentTarget.style.color=T.red;e.currentTarget.style.borderColor=T.red;}}
+                onMouseLeave={(e)=>{e.currentTarget.style.color=T.grey500;e.currentTarget.style.borderColor=T.border;}}>Clear</button>
+            </div>
+          )}
+        </div>
+        <div style={{ padding:"16px 20px" }}>
+          <div style={{ fontSize:12,color:T.grey500,background:T.grey100,borderLeft:`3px solid ${T.blue}`,borderRadius:"0 6px 6px 0",padding:"8px 12px",marginBottom:14 }}>
+            Upload the OD Operation form with a <strong>Nominal</strong> column. Each record will be matched against the master file, then GPS-verified against employee location.
+          </div>
+          {odOpFileName ? (
+            <div style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 13px",background:T.blueBg,border:"1px solid rgba(14,165,233,0.25)",borderRadius:8 }}>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:12.5,fontWeight:600,color:T.blue,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{odOpFileName}</div>
+                <div style={{ fontSize:11,color:T.grey500,marginTop:1 }}>{odOpResults.length} records · Upload GPS files below and click Match All to see results</div>
+              </div>
+            </div>
+          ) : (
+            <label style={{ display:"flex",alignItems:"center",gap:10,padding:"11px 16px",border:`2px dashed ${T.border}`,borderRadius:10,cursor:odOpMasterFileName?"pointer":"not-allowed",background:"#fafafa",transition:"all 0.15s" }}
+              onMouseEnter={(e)=>{if(odOpMasterFileName){e.currentTarget.style.borderColor=T.blue;e.currentTarget.style.background=T.blueBg;}}}
+              onMouseLeave={(e)=>{e.currentTarget.style.borderColor=T.border;e.currentTarget.style.background="#fafafa";}}>
+              <FolderOpen size={18} color={T.grey500}/>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:13,fontWeight:600,color:T.black }}>{odOpParsing ? "Parsing file…" : "Click to choose OD Operation form"}</div>
+                <div style={{ fontSize:11.5,color:T.grey500,marginTop:1 }}>.xlsx / .xls / .csv — must have Nominal column with site IDs</div>
+              </div>
+              <Upload size={14} color={T.grey500}/>
+              <input ref={odOpRef} type="file" accept=".xlsx,.xls,.xlsb,.csv" style={{ display:"none" }}
+                onChange={(e)=>{ const f=e.target.files[0]; if(f) handleOdOpUpload(f); }}/>
+            </label>
+          )}
+          {odOpError && <div style={{ marginTop:8,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
+        </div>
+      </div>
+
+      </>} {/* end od-operation flow */}
 
       {/* ── Step 3: Employee GPS files ───────────────────────────── */}
       <div style={{ ...card, opacity:gpsUploadEnabled?1:0.5, pointerEvents:gpsUploadEnabled?"auto":"none" }}>
