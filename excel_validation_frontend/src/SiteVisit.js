@@ -1468,7 +1468,7 @@ export default function SiteVisit() {
             <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
               <thead>
                 <tr style={{ background:"#0369a1" }}>
-                  {["#","Person","Nominal (Site ID)","Site Name","Employee GPS → Master GPS","Match Source","Gap","Time/Date","Incident Remark","Resolved","Status"].map(h=>(
+                  {["#","Person","Nominal (Site ID)","Site Name","Match Source","Gap","Time/Date","Incident Remark","Resolved","Status"].map(h=>(
                     <th key={h} style={{ padding:"10px 13px",textAlign:"left",color:"#fff",fontWeight:600,fontSize:11.5,textTransform:"uppercase",letterSpacing:"0.04em",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -1482,14 +1482,6 @@ export default function SiteVisit() {
                     <td style={{ padding:"10px 13px",fontWeight:600,whiteSpace:"nowrap" }}>{r.userName||"—"}</td>
                     <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:r.matched?T.blue:T.red,fontWeight:600 }}>{r.nominal}</td>
                     <td style={{ padding:"10px 13px",fontSize:12 }}>{r.siteName||"—"}</td>
-                    <td style={{ padding:"10px 13px",fontSize:11.5 }}>
-                      {r.gpsVerified && r.closestPing ? (
-                        <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
-                          <span style={{ color:T.blue,fontFamily:"monospace" }}>{r.closestPing.lat.toFixed(5)}, {r.closestPing.lng.toFixed(5)}</span>
-                          <span style={{ color:T.green,fontFamily:"monospace" }}>{r.siteLat?.toFixed(5)}, {r.siteLng?.toFixed(5)}</span>
-                        </div>
-                      ) : r.matched ? <span style={{ color:T.grey500,fontSize:11 }}>No GPS ping near site</span> : "—"}
-                    </td>
                     <td style={{ padding:"10px 13px",fontSize:11,color:T.grey500 }}>
                       {r.matched && r.masterFileName ? `${r.masterFileName} · Row ${r.masterRowNum} · ${r.latColName}/${r.lngColName}` : "—"}
                     </td>
