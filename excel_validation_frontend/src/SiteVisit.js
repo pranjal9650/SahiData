@@ -470,10 +470,17 @@ export default function SiteVisit() {
         const remark    = iRemark   !== -1 ? String(r[iRemark]   || "").trim() : "";
         const resolved  = iResolved !== -1 ? String(r[iResolved] || "").trim() : "";
         const siteType  = iType     !== -1 ? String(r[iType]     || "").trim() : "";
-        const norm = nominal.toLowerCase();
-        const matchedSite = odOpMasterSites.find(s =>
-          (s.stsId && s.stsId.trim().toLowerCase() === norm) ||
-          (s.name  && s.name.trim().toLowerCase()  === norm));
+        // Normalize dashes/underscores so ST_DELHI_HPSC_327 == ST-DELHI-HPSC-327
+        const _nid = s => s.toLowerCase().replace(/[-_]/g, "-").trim();
+        const nomNorm  = _nid(nominal);
+        // Also try just the first word — handles "ST-DELHI-HPSC-198 HPSC_Tilak Nagar..." compound entries
+        const nomFirst = _nid(nominal.split(/\s+/)[0]);
+        const matchedSite = odOpMasterSites.find(s => {
+          const mId   = _nid(s.stsId || "");
+          const mName = (s.name || "").trim().toLowerCase();
+          return (mId   && (mId === nomNorm || mId === nomFirst)) ||
+                 (mName && mName === nominal.toLowerCase().trim());
+        });
         parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
           siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
           siteLat: matchedSite?.lat ?? null, siteLng: matchedSite?.lng ?? null,
