@@ -1475,11 +1475,10 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         tc_op.fill      = PatternFill("solid", fgColor="EFF6FF")
         ws_op.row_dimensions[1].height = 22
 
-        OP_RED = "DC2626"
         for ci, h in enumerate(OP_HEADERS, 1):
             c = ws_op.cell(row=2, column=ci, value=h)
             c.font      = Font(bold=True, color=WHITE, name="Calibri", size=10)
-            c.fill      = PatternFill("solid", fgColor=OP_RED)
+            c.fill      = PatternFill("solid", fgColor=BLUE)
             c.alignment = center()
             c.border    = all_border()
         ws_op.row_dimensions[2].height = 22
