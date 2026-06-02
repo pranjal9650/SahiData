@@ -835,13 +835,8 @@ export default function SiteVisit() {
     }
     allRows.forEach((r, i) => { r.rowNumber = i + 1; });
 
-    // OD Operation Form GPS verification — only rows for people whose GPS was uploaded
-    const uploadedPersonKeys = [...allPings.keys()];
-    const odOpFiltered = odOpResults.filter(opRow => {
-      const normUser = (opRow.userName || "").toLowerCase();
-      return uploadedPersonKeys.some(k => k === normUser || k.includes(normUser) || normUser.includes(k));
-    });
-    const odOpRows = odOpFiltered.map((opRow, idx) => {
+    // OD Operation Form GPS verification — all form entries; GPS verified only where pings exist
+    const odOpRows = odOpResults.map((opRow, idx) => {
       if (!opRow.matched) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site not in master" };
       if (opRow.siteLat === null || opRow.siteLng === null) return { ...opRow, rowNum: idx + 1, gpsVerified: false, gpsDist: null, closestPing: null, gpsStatus: "Site has no GPS in master" };
       const normUser = (opRow.userName || "").toLowerCase();
