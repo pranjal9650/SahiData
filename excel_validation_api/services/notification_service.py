@@ -1462,10 +1462,9 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     if od_op_rows:
         from collections import OrderedDict as _ODOp
         ws_op = wb.create_sheet("OD Operation Form")
-        OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name",
-                      "Employee GPS → Master GPS", "Match Source", "Gap",
-                      "Time/Date", "Incident Remark", "Resolved", "Status"]
-        op_widths  = [5, 22, 22, 28, 50, 30, 14, 20, 30, 14, 22]
+        OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name", "Circle",
+                      "GPS Distance", "Time/Date", "Incident Remark", "Resolved", "Status"]
+        op_widths  = [5, 22, 22, 28, 14, 16, 20, 32, 14, 22]
 
         ws_op.merge_cells(f"A1:{get_column_letter(len(OP_HEADERS))}1")
         tc_op = ws_op["A1"]
@@ -1501,6 +1500,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             if not existing or len(new_name) < len(existing):
                 op_display[key] = new_name
 
+        seq_num = 1
         row_idx = 3
         for key, recs in op_groups.items():
             person      = op_display[key]
@@ -1522,12 +1522,11 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 row_fill    = alt_fill(ri)
 
                 vals = [
-                    rec.get("row_num", ""),
+                    seq_num,
                     rec["full_name"],
                     rec.get("nominal", ""),
                     rec.get("site_name", ""),
-                    rec.get("employee_gps", ""),
-                    rec.get("match_source", ""),
+                    rec.get("circle", ""),
                     rec.get("gap", ""),
                     rec.get("time_date", ""),
                     rec.get("incident_remark", ""),
@@ -1538,11 +1537,10 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                     c = ws_op.cell(row=ri, column=ci, value=val)
                     c.fill      = status_fill if ci == len(OP_HEADERS) else row_fill
                     c.font      = status_font if ci == len(OP_HEADERS) else bod_font()
-                    c.alignment = Alignment(wrap_text=True, vertical="top") if ci == 5 else (
-                        center() if ci in (1, 7, 10, 11) else left()
-                    )
-                    c.border = all_border()
-                ws_op.row_dimensions[ri].height = 42
+                    c.alignment = center() if ci in (1, 6, 9, 10) else left()
+                    c.border    = all_border()
+                ws_op.row_dimensions[ri].height = 22
+                seq_num += 1
 
             row_idx += len(recs)
 
@@ -1837,11 +1835,12 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             _sm_od_gps_col     = _find_col(_sm_cols, ["OD Survey GPS"])
             _sm_time_col       = _find_col(_sm_cols, ["Time"])
             _sm_rownum_col     = _find_col(_sm_cols, ["#"])
-            _sm_person_col    = _find_col(_sm_cols, ["Person"])
-            _sm_nominal_col   = _find_col(_sm_cols, ["Nominal"])
-            _sm_incident_col  = _find_col(_sm_cols, ["Incident Remark"])
-            _sm_resolved_col  = _find_col(_sm_cols, ["Resolved"])
-            _sm_gap_op_col    = _find_col(_sm_cols, ["Gap"])
+            _sm_person_col      = _find_col(_sm_cols, ["Person"])
+            _sm_nominal_col     = _find_col(_sm_cols, ["Nominal"])
+            _sm_incident_col    = _find_col(_sm_cols, ["Incident Remark"])
+            _sm_resolved_col    = _find_col(_sm_cols, ["Problem Resolved", "Resolved"])
+            _sm_gap_op_col      = _find_col(_sm_cols, ["GPS Distance", "Gap"])
+            _sm_gps_status_col  = _find_col(_sm_cols, ["GPS Status"])
             print(f"[Report] Site master columns: {_sm_cols}")
             print(f"[Report] Site master status column: {_sm_status_col}, OD Verified col: {_sm_od_col}")
             for _, r in _sm_df.iterrows():
@@ -1878,17 +1877,17 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                             _op_n and _op_n.lower() not in ("nan", "none", "")):
                         def _g(col): return str(r.get(col, "")).strip() if col else ""
                         def _clean(v): return "" if v.lower() in ("nan", "none") else v
+                        _raw_status = _g(_sm_gps_status_col) or _g(_sm_status_col)
                         _sm_od_op_rows.append({
                             "full_name":       _op_p,
                             "nominal":         _op_n,
                             "site_name":       _clean(_g(_sm_sname_col)),
-                            "employee_gps":    _clean(_g(_sm_emp_gps_col)),
-                            "match_source":    _clean(_g(_sm_match_src_col)),
+                            "circle":          _clean(_g(_sm_circ_col)),
                             "gap":             _clean(_g(_sm_gap_op_col)),
                             "time_date":       _clean(_g(_sm_time_col)),
                             "incident_remark": _clean(_g(_sm_incident_col)),
                             "resolved":        _clean(_g(_sm_resolved_col)),
-                            "status":          _clean(_g(_sm_status_col)),
+                            "status":          _clean(_raw_status),
                             "row_num":         _clean(_g(_sm_rownum_col)),
                         })
 
