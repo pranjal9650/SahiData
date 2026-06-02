@@ -79,15 +79,6 @@ const FILE_SLOTS = [
     freq:        "Daily",
     noDateCheck: true,
   },
-  {
-    key:         "site_master",
-    label:       "Site Master",
-    description: "Master site list — Global ID, Site Name, State/Circle, Latitude, Longitude",
-    accept:      ".xlsx,.xls,.csv",
-    icon:        FileSpreadsheet,
-    freq:        "Monthly / as updated",
-    noDateCheck: true,
-  },
 ];
 
 // ── helpers ───────────────────────────────────────────────────────────
@@ -275,6 +266,158 @@ function badge(color, bg, borderColor) {
     borderRadius: 4, padding: "2px 6px",
     whiteSpace: "nowrap", letterSpacing: "0.1px",
   };
+}
+
+// ── Site Master multi-file card ───────────────────────────────────────
+
+const SM_KEYS = ["site_master", "site_master_2", "site_master_3", "site_master_4", "site_master_5"];
+
+function SiteMasterMultiCard({ statusData, onUpload, uploadingKey, onRemove }) {
+  const inputRef = useRef(null);
+  const [drag,  setDrag]  = useState(false);
+  const [hover, setHover] = useState(false);
+
+  const uploadedKeys = SM_KEYS.filter(k => statusData[k]?.uploaded && statusData[k]?.meta);
+  const nextEmptyKey = SM_KEYS.find(k => !statusData[k]?.uploaded);
+  const atMax        = !nextEmptyKey;
+  const anyUploaded  = uploadedKeys.length > 0;
+  const anyFresh     = uploadedKeys.some(k => isToday(statusData[k]?.meta?.uploaded_at));
+  const busy         = uploadingKey === nextEmptyKey;
+
+  const accentColor = anyFresh ? "#22c55e" : anyUploaded ? "#f59e0b" : "rgba(204,0,0,0.25)";
+  const borderColor = anyFresh ? "#86efac" : anyUploaded ? "#fca5a5" : "rgba(204,0,0,0.18)";
+  const iconBg      = anyFresh ? "rgba(34,197,94,0.10)" : anyUploaded ? "rgba(245,158,11,0.10)" : "rgba(204,0,0,0.07)";
+  const iconColor   = anyFresh ? "#16a34a" : anyUploaded ? "#d97706" : "#CC0000";
+  const cardBg      = hover
+    ? (anyFresh ? "rgba(34,197,94,0.07)" : anyUploaded ? "rgba(239,68,68,0.05)" : "rgba(204,0,0,0.04)")
+    : "#ffffff";
+
+  const pick = (file) => { if (file && nextEmptyKey) onUpload(nextEmptyKey, file); };
+
+  return (
+    <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        background: cardBg,
+        borderRadius: 14,
+        border: `1.5px solid ${borderColor}`,
+        boxShadow: hover ? "0 8px 24px rgba(0,0,0,0.09)" : "0 1px 4px rgba(0,0,0,0.05)",
+        padding: "10px 10px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 5,
+        overflow: "hidden",
+        transition: "box-shadow .2s, transform .18s, background .2s, border-color .2s",
+        transform: hover ? "translateY(-2px)" : "none",
+      }}
+    >
+      {/* header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        <div style={{ width: 20, height: 20, borderRadius: 6, background: iconBg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "background .2s" }}>
+          <FileSpreadsheet size={9} color={iconColor} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#1E293B", letterSpacing: "-0.2px", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.3 }}>
+            Site Master
+          </div>
+          <div style={{ fontSize: 10, color: "#C4CBD8", marginTop: 1, whiteSpace: "nowrap" }}>Monthly / as updated</div>
+        </div>
+        {anyUploaded && (
+          <span style={{ fontSize: 10, fontWeight: 700, color: anyFresh ? "#16a34a" : "#d97706", background: anyFresh ? "#f0fdf4" : "#fefce8", border: `1px solid ${anyFresh ? "#bbf7d0" : "#fde68a"}`, borderRadius: 4, padding: "1px 5px", flexShrink: 0, whiteSpace: "nowrap" }}>
+            {uploadedKeys.length}/5
+          </span>
+        )}
+        <span style={{ width: 6, height: 6, borderRadius: "50%", background: accentColor, flexShrink: 0, marginTop: 2, transition: "background .2s" }} />
+      </div>
+
+      {/* badge */}
+      <div>
+        {anyFresh ? (
+          <span style={badge("#15803d", "#f0fdf4", "#bbf7d0")}><CheckCircle size={8} /> Ready</span>
+        ) : anyUploaded ? (
+          <span style={badge("#b45309", "#fefce8", "#fde68a")}><AlertTriangle size={8} /> Outdated</span>
+        ) : (
+          <span style={badge("#CC0000", "rgba(204,0,0,0.06)", "rgba(204,0,0,0.20)")}><Clock size={8} /> Pending</span>
+        )}
+      </div>
+
+      {/* uploaded files list */}
+      {uploadedKeys.map(k => {
+        const m = statusData[k]?.meta;
+        const fresh = isToday(m?.uploaded_at);
+        return (
+          <div key={k} style={{ display: "flex", alignItems: "center", gap: 4, background: fresh ? "#f0fdf4" : "#f9fafb", border: `1px solid ${fresh ? "#bbf7d0" : "#E2E8F0"}`, borderRadius: 6, padding: "3px 5px" }}>
+            <FileSpreadsheet size={8} color={fresh ? "#16a34a" : "#9CA3AF"} style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1, fontSize: 9.5, fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {m?.original_name || k}
+            </span>
+            <button
+              onClick={(e) => { e.stopPropagation(); onRemove(k); }}
+              title="Remove"
+              style={{ background: "none", border: "none", cursor: "pointer", padding: "1px 2px", color: "#D1D5DB", display: "flex", alignItems: "center", flexShrink: 0, lineHeight: 1 }}
+            >
+              <Trash2 size={8} />
+            </button>
+          </div>
+        );
+      })}
+
+      {/* spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* upload zone */}
+      {atMax ? (
+        <div style={{ textAlign: "center", fontSize: 10, color: "#9CA3AF", padding: "4px 0" }}>Max 5 files</div>
+      ) : (
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={(e) => { e.preventDefault(); setDrag(false); pick(e.dataTransfer.files[0]); }}
+          onClick={() => !busy && inputRef.current?.click()}
+          style={{
+            borderRadius: 8,
+            border: `1.5px dashed ${drag ? T.red : anyUploaded ? "#E2E8F0" : "#D8DFE8"}`,
+            padding: anyUploaded ? "4px 8px" : "8px 6px",
+            display: "flex",
+            flexDirection: anyUploaded ? "row" : "column",
+            alignItems: "center",
+            justifyContent: anyUploaded ? "flex-start" : "center",
+            gap: anyUploaded ? 6 : 5,
+            cursor: busy ? "not-allowed" : "pointer",
+            background: drag ? "#FFF5F5" : anyUploaded ? "#FAFBFD" : "#F7F9FC",
+            transition: "all .15s",
+            opacity: busy ? 0.7 : 1,
+          }}
+        >
+          {anyUploaded ? (
+            <>
+              {busy
+                ? <RefreshCw size={10} color={T.red} style={{ flexShrink: 0, animation: "spin 1s linear infinite" }} />
+                : <Upload size={10} color={drag ? T.red : "#C4CBD8"} style={{ flexShrink: 0 }} />}
+              <span style={{ flex: 1, fontSize: 11, color: busy ? T.red : "#B8C0CC", fontWeight: 500 }}>
+                {busy ? "Uploading…" : "Add another file"}
+              </span>
+              {!busy && <span style={{ fontSize: 10, color: "#D1D5DB", flexShrink: 0 }}>XLSX · CSV</span>}
+            </>
+          ) : (
+            <>
+              <div style={{ width: 22, height: 22, borderRadius: 7, background: drag ? "#FEE2E2" : "rgba(204,0,0,0.08)", display: "flex", alignItems: "center", justifyContent: "center", transition: "background .15s" }}>
+                {busy
+                  ? <RefreshCw size={10} color={T.red} style={{ animation: "spin 1s linear infinite" }} />
+                  : <Upload size={10} color={drag ? T.red : "#CC0000"} />}
+              </div>
+              <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 500, textAlign: "center" }}>
+                {busy ? "Uploading…" : "Click or drop"}
+              </span>
+              {!busy && <span style={{ fontSize: 10, color: "#C4CBD8" }}>XLSX · CSV</span>}
+            </>
+          )}
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => pick(e.target.files[0])} />
+    </div>
+  );
 }
 
 // ── WFH / WFO card (fits inside the 3-column file grid) ──────────────
@@ -841,6 +984,16 @@ export default function EmailReports() {
     }
   };
 
+  const handleRemoveSiteMaster = async (key) => {
+    try {
+      await axios.post(`${API}/CLEAR-REPORT-FILE/${key}`);
+      await fetchStatus();
+      showToast("success", "File removed.");
+    } catch (e) {
+      showToast("error", "Failed to remove file.");
+    }
+  };
+
   const handleUpload = async (fileType, file) => {
     if (serverOnline !== true) {
       showToast("error", "Backend server is not running. Start uvicorn first.");
@@ -1151,6 +1304,12 @@ export default function EmailReports() {
               reportDate={reportDate}
             />
           ))}
+          <SiteMasterMultiCard
+            statusData={status}
+            onUpload={handleUpload}
+            uploadingKey={uploadingKey}
+            onRemove={handleRemoveSiteMaster}
+          />
           <WfhWfoCard
             wfhAnalyzing={wfhAnalyzing}
             wfhInputRef={wfhInputRef}

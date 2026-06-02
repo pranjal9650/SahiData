@@ -92,7 +92,11 @@ REPORT_FILE_MAP = {
     "forms_filled": "forms_filled.xlsx",
     "alarm":        "alarm.csv",
     "active_sites": "active_sites.xlsx",
-    "site_master":  "site_master.xlsx",
+    "site_master":   "site_master.xlsx",
+    "site_master_2": "site_master_2.xlsx",
+    "site_master_3": "site_master_3.xlsx",
+    "site_master_4": "site_master_4.xlsx",
+    "site_master_5": "site_master_5.xlsx",
 }
 
 # =====================================================
@@ -3590,6 +3594,28 @@ def clear_report_files():
         os.remove(meta_path)
 
     return {"status": "success", "cleared": deleted}
+
+
+@app.post("/CLEAR-REPORT-FILE/{file_type}")
+def clear_report_file(file_type: str):
+    """Deletes a single daily report file by its type key."""
+    if file_type not in REPORT_FILE_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown file type: {file_type}")
+
+    path = os.path.join(REPORT_DAILY_DIR, REPORT_FILE_MAP[file_type])
+    if os.path.exists(path):
+        os.remove(path)
+
+    meta_path = os.path.join(REPORT_DAILY_DIR, "meta.json")
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as f:
+            meta_store = json.load(f)
+        if file_type in meta_store:
+            del meta_store[file_type]
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta_store, f, indent=2)
+
+    return {"status": "success", "cleared": file_type}
 
 
 # =====================================================
