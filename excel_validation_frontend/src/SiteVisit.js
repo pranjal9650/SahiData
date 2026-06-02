@@ -244,6 +244,8 @@ export default function SiteVisit() {
   const [odOpError, setOdOpError]       = useState("");
   const odOpRef = useRef(null);
 
+  const [formType, setFormType] = useState("od-survey");
+
   const odOpReady      = odOpMasterSites.length > 0 && odOpResults.length > 0;
   const gpsUploadEnabled = masterReady || odOpReady;
 
@@ -955,6 +957,30 @@ export default function SiteVisit() {
         </div>
       </div>
 
+      {/* Form type selector */}
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+        {[
+          { id:"od-survey",    label:"OD Survey Form" },
+          { id:"od-operation", label:"OD Operation Form" },
+          { id:"meeting",      label:"Meeting Form",  disabled:true },
+          { id:"eb-meter",     label:"EB Meter",      disabled:true },
+        ].map(ft => (
+          <button key={ft.id} onClick={()=>!ft.disabled&&setFormType(ft.id)}
+            style={{ padding:"7px 18px", borderRadius:99, fontSize:13, fontWeight:600, fontFamily:"inherit",
+              background: formType===ft.id ? T.red : "transparent",
+              color: formType===ft.id ? "#fff" : ft.disabled ? T.grey500 : T.black,
+              border: formType===ft.id ? "none" : `1px solid ${T.border}`,
+              cursor: ft.disabled ? "not-allowed" : "pointer",
+              opacity: ft.disabled ? 0.45 : 1,
+              transition:"all 0.15s" }}>
+            {ft.label}{ft.disabled && <span style={{ fontSize:10,marginLeft:5,fontWeight:500 }}>coming soon</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* ── OD Survey flow ───────────────────────────────────────── */}
+      {formType === "od-survey" && <>
+
       {/* ── Step 1: Master files ─────────────────────────────────── */}
       <div style={card}>
         <div style={cardHeader}>
@@ -1078,8 +1104,10 @@ export default function SiteVisit() {
         </div>
       </div>
 
-      {/* ── OD Operation Form ────────────────────────────────────── */}
-      <div style={card}>
+      </>} {/* end od-survey flow */}
+
+      {/* ── OD Operation flow ────────────────────────────────────── */}
+      {formType === "od-operation" && <div style={card}>
         <div style={cardHeader}>
           <p style={cardTitle}>OD Operation Form <span style={{ fontWeight:400,color:T.grey500,fontSize:12 }}>(optional)</span></p>
           <div style={{ display:"flex",alignItems:"center",gap:8 }}>
@@ -1151,7 +1179,7 @@ export default function SiteVisit() {
             {odOpError && <div style={{ marginTop:6,fontSize:12,color:T.red,fontWeight:500 }}>⚠ {odOpError}</div>}
           </div>
         </div>
-      </div>
+      </div>} {/* end od-operation flow */}
 
       {/* ── Step 3: Employee GPS files ───────────────────────────── */}
       <div style={{ ...card, opacity:gpsUploadEnabled?1:0.5, pointerEvents:gpsUploadEnabled?"auto":"none" }}>
