@@ -914,6 +914,7 @@ export default function SiteVisit() {
   }
 
   /* ── Filtered rows ───────────────────────────────────────────── */
+  const tabReports = reports.filter(r => (r.formType || "od-survey") === formType);
   const activeReportHasOd = activeReport && activeReport.hasOdSurvey;
   const displayRows = activeReport
     ? activeReport.rows.filter((r) => {
@@ -1299,9 +1300,9 @@ export default function SiteVisit() {
       {/* ── Recent uploads ────────────────────────────────────────── */}
       <div style={card}>
         <div style={cardHeader}><p style={cardTitle}>Recent Uploads</p></div>
-        {reports.length===0 ? (
-          <div style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No uploads yet. Upload GPS reports to begin.</div>
-        ) : reports.slice(0,5).map((r)=>(
+        {tabReports.length===0 ? (
+          <div style={{ textAlign:"center",padding:40,color:T.grey500,fontSize:13 }}>No uploads yet for this tab.</div>
+        ) : tabReports.slice(0,5).map((r)=>(
           <div key={r.id} onClick={()=>{setActiveReport(r);setSearch("");setStatusFilter("");}}
             style={{ display:"flex",alignItems:"center",gap:14,padding:"13px 20px",borderBottom:`1px solid ${T.border}`,cursor:"pointer" }}
             onMouseEnter={(e)=>(e.currentTarget.style.background=T.grey100)}
