@@ -103,7 +103,11 @@ DAILY_FILES = {
     "forms_filled": os.path.join(DAILY_DIR, "forms_filled.xlsx"),
     "alarm":        os.path.join(DAILY_DIR, "alarm.csv"),
     "active_sites": os.path.join(DAILY_DIR, "active_sites.xlsx"),
-    "site_master":  os.path.join(DAILY_DIR, "site_master.xlsx"),
+    "site_master":   os.path.join(DAILY_DIR, "site_master.xlsx"),
+    "site_master_2": os.path.join(DAILY_DIR, "site_master_2.xlsx"),
+    "site_master_3": os.path.join(DAILY_DIR, "site_master_3.xlsx"),
+    "site_master_4": os.path.join(DAILY_DIR, "site_master_4.xlsx"),
+    "site_master_5": os.path.join(DAILY_DIR, "site_master_5.xlsx"),
     "od_survey":    os.path.join(DAILY_DIR, "od_survey.xlsx"),
 }
 
@@ -1035,7 +1039,7 @@ def _validated_remark(attendance, forms_count, gps=None, site_visit=False, site_
     return str(attendance).strip() or "NA"
 
 
-def build_excel_report(rows, report_date, title="Productivity Report", sites_down=None, wfh_wfo_map=None, site_visit_status=None, od_survey_rows=None):
+def build_excel_report(rows, report_date, title="Productivity Report", sites_down=None, wfh_wfo_map=None, site_visit_status=None, od_survey_rows=None, od_op_rows=None):
     """
     rows: list of dicts with keys:
       full_name, username, circle, business_domain, role,
@@ -1454,6 +1458,99 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             ws_od.column_dimensions[get_column_letter(ci)].width = w
         ws_od.freeze_panes = "A3"
 
+    # ── OD Operation Form Sheet ───────────────────────────────────────
+    if od_op_rows:
+        from collections import OrderedDict as _ODOp
+        ws_op = wb.create_sheet("OD Operation Form")
+        OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name",
+                      "Employee GPS → Master GPS", "Match Source", "Gap",
+                      "Time/Date", "Incident Remark", "Resolved", "Status"]
+        op_widths  = [5, 22, 22, 28, 50, 30, 14, 20, 30, 14, 22]
+
+        ws_op.merge_cells(f"A1:{get_column_letter(len(OP_HEADERS))}1")
+        tc_op = ws_op["A1"]
+        tc_op.value     = f"OD Operation Form — {report_date}"
+        tc_op.font      = Font(bold=True, color=BLUE, name="Calibri", size=13)
+        tc_op.alignment = center()
+        tc_op.fill      = PatternFill("solid", fgColor="EFF6FF")
+        ws_op.row_dimensions[1].height = 22
+
+        OP_RED = "DC2626"
+        for ci, h in enumerate(OP_HEADERS, 1):
+            c = ws_op.cell(row=2, column=ci, value=h)
+            c.font      = Font(bold=True, color=WHITE, name="Calibri", size=10)
+            c.fill      = PatternFill("solid", fgColor=OP_RED)
+            c.alignment = center()
+            c.border    = all_border()
+        ws_op.row_dimensions[2].height = 22
+
+        OP_GREEN_FILL = PatternFill("solid", fgColor="DCFCE7")
+        OP_RED_FILL   = PatternFill("solid", fgColor="FEE2E2")
+        OP_GREEN_FONT = Font(color="15803D", name="Calibri", size=10, bold=True)
+        OP_RED_FONT   = Font(color="991B1B", name="Calibri", size=10, bold=True)
+
+        def _op_person_key(name):
+            return re.sub(r'_st[sn]?$', '', name, flags=re.IGNORECASE).strip().lower()
+
+        op_groups   = _ODOp()
+        op_display  = {}
+        for r in od_op_rows:
+            key = _op_person_key(r["full_name"])
+            op_groups.setdefault(key, []).append(r)
+            existing = op_display.get(key, "")
+            new_name = r["full_name"]
+            if not existing or len(new_name) < len(existing):
+                op_display[key] = new_name
+
+        row_idx = 3
+        for key, recs in op_groups.items():
+            person      = op_display[key]
+            visited_c   = sum(1 for r in recs if "visited" in str(r.get("status", "")).lower())
+            not_visited = len(recs) - visited_c
+
+            ws_op.merge_cells(f"A{row_idx}:{get_column_letter(len(OP_HEADERS))}{row_idx}")
+            sc = ws_op.cell(row=row_idx, column=1,
+                            value=f"{person}   —   {len(recs)} OD Operation form(s)  ·  {visited_c} Site Visited  ·  {not_visited} Not Visited")
+            sc.font = grp_font(); sc.fill = grp_fill()
+            sc.alignment = left(); sc.border = all_border()
+            ws_op.row_dimensions[row_idx].height = 18
+            row_idx += 1
+
+            for ri, rec in enumerate(recs, row_idx):
+                is_visited  = "visited" in str(rec.get("status", "")).lower()
+                status_fill = OP_GREEN_FILL if is_visited else OP_RED_FILL
+                status_font = OP_GREEN_FONT if is_visited else OP_RED_FONT
+                row_fill    = alt_fill(ri)
+
+                vals = [
+                    rec.get("row_num", ""),
+                    rec["full_name"],
+                    rec.get("nominal", ""),
+                    rec.get("site_name", ""),
+                    rec.get("employee_gps", ""),
+                    rec.get("match_source", ""),
+                    rec.get("gap", ""),
+                    rec.get("time_date", ""),
+                    rec.get("incident_remark", ""),
+                    rec.get("resolved", ""),
+                    rec.get("status", ""),
+                ]
+                for ci, val in enumerate(vals, 1):
+                    c = ws_op.cell(row=ri, column=ci, value=val)
+                    c.fill      = status_fill if ci == len(OP_HEADERS) else row_fill
+                    c.font      = status_font if ci == len(OP_HEADERS) else bod_font()
+                    c.alignment = Alignment(wrap_text=True, vertical="top") if ci == 5 else (
+                        center() if ci in (1, 7, 10, 11) else left()
+                    )
+                    c.border = all_border()
+                ws_op.row_dimensions[ri].height = 42
+
+            row_idx += len(recs)
+
+        for ci, w in enumerate(op_widths, 1):
+            ws_op.column_dimensions[get_column_letter(ci)].width = w
+        ws_op.freeze_panes = "A3"
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
@@ -1710,12 +1807,17 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     employee_df.columns   = employee_df.columns.astype(str).str.strip()
     attendance_df.columns = attendance_df.columns.astype(str).str.strip()
 
-    # ---- Load site master — build username/name → Status mapping + lat/long master ----
+    # ---- Load site master(s) — build username/name → Status mapping + lat/long master ----
     _site_visit_status: dict = {}
     _site_latlong_master: list = []   # [{site_id, site_name, circle, lat, lng}]
     _sm_od_rows: list = []            # OD Survey rows extracted from Site Visit export
-    _site_master_path = DAILY_FILES.get("site_master", "")
-    if _site_master_path and os.path.exists(_site_master_path):
+    _sm_od_op_rows: list = []         # OD Operation rows extracted from OD Operation export
+    _site_master_paths = [
+        DAILY_FILES.get(k, "") for k in ["site_master", "site_master_2", "site_master_3", "site_master_4", "site_master_5"]
+        if DAILY_FILES.get(k, "") and os.path.exists(DAILY_FILES.get(k, ""))
+    ]
+    for _site_master_path in _site_master_paths:
+      if _site_master_path and os.path.exists(_site_master_path):
         try:
             _sm_df = pd.read_excel(_site_master_path) if not _site_master_path.endswith(".csv") else pd.read_csv(_site_master_path, dtype=str, encoding="latin-1")
             _sm_df.columns = _sm_df.columns.astype(str).str.strip()
@@ -1736,6 +1838,11 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             _sm_od_gps_col     = _find_col(_sm_cols, ["OD Survey GPS"])
             _sm_time_col       = _find_col(_sm_cols, ["Time"])
             _sm_rownum_col     = _find_col(_sm_cols, ["#"])
+            _sm_person_col    = _find_col(_sm_cols, ["Person"])
+            _sm_nominal_col   = _find_col(_sm_cols, ["Nominal"])
+            _sm_incident_col  = _find_col(_sm_cols, ["Incident Remark"])
+            _sm_resolved_col  = _find_col(_sm_cols, ["Resolved"])
+            _sm_gap_op_col    = _find_col(_sm_cols, ["Gap"])
             print(f"[Report] Site master columns: {_sm_cols}")
             print(f"[Report] Site master status column: {_sm_status_col}, OD Verified col: {_sm_od_col}")
             for _, r in _sm_df.iterrows():
@@ -1764,6 +1871,28 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                             })
                     except (ValueError, TypeError):
                         pass
+                # Extract OD Operation rows if this is an OD Operation export
+                if _sm_nominal_col:
+                    _op_p = str(r.get(_sm_person_col, "")).strip() if _sm_person_col else ""
+                    _op_n = str(r.get(_sm_nominal_col, "")).strip()
+                    if (_op_p and _op_p.lower() not in ("nan", "none", "") and
+                            _op_n and _op_n.lower() not in ("nan", "none", "")):
+                        def _g(col): return str(r.get(col, "")).strip() if col else ""
+                        def _clean(v): return "" if v.lower() in ("nan", "none") else v
+                        _sm_od_op_rows.append({
+                            "full_name":       _op_p,
+                            "nominal":         _op_n,
+                            "site_name":       _clean(_g(_sm_sname_col)),
+                            "employee_gps":    _clean(_g(_sm_emp_gps_col)),
+                            "match_source":    _clean(_g(_sm_match_src_col)),
+                            "gap":             _clean(_g(_sm_gap_op_col)),
+                            "time_date":       _clean(_g(_sm_time_col)),
+                            "incident_remark": _clean(_g(_sm_incident_col)),
+                            "resolved":        _clean(_g(_sm_resolved_col)),
+                            "status":          _clean(_g(_sm_status_col)),
+                            "row_num":         _clean(_g(_sm_rownum_col)),
+                        })
+
                 # Extract OD Survey rows if this is a Site Visit export
                 if _sm_od_col:
                     od_val = str(r.get(_sm_od_col, "")).strip().lower()
@@ -1817,7 +1946,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                         "od_gps":       od_gps,
                         "time_str":     time_str,
                     })
-            print(f"[Report] Site master loaded: {len(_site_visit_status)} status records, {len(_site_latlong_master)} lat/long sites, {len(_sm_od_rows)} OD rows")
+            print(f"[Report] Site master loaded: {len(_site_visit_status)} status records, {len(_site_latlong_master)} lat/long sites, {len(_sm_od_rows)} OD rows, {len(_sm_od_op_rows)} OD Op rows")
         except Exception as e:
             print(f"[Report] Site master read error: {e}")
 
@@ -2330,6 +2459,11 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                 })
         print(f"[OD Survey] Built {len(od_survey_rows)} rows — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
 
+    # OD Operation rows — from site_master uploads only
+    od_op_rows = _sm_od_op_rows if _sm_od_op_rows else []
+    if od_op_rows:
+        print(f"[OD Operation] Loaded {len(od_op_rows)} rows from site_master (OD Operation export)")
+
     # =====================================================
     # ALARM / SITE DOWN PROCESSING
     # =====================================================
@@ -2519,7 +2653,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
             mgr_rows = [r for r in excel_rows if r["manager"] == manager]
             body = build_manager_email(manager, users, report_date, excel_rows=mgr_rows)
             try:
-                xl_bytes  = build_excel_report(mgr_rows, report_date, f"Manager Report — {manager}", wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows)
+                xl_bytes  = build_excel_report(mgr_rows, report_date, f"Manager Report — {manager}", wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows, od_op_rows=od_op_rows)
                 xl_name   = f"Manager_Report_{manager.replace(' ', '_')}_{report_date.replace(' ', '_')}.xlsx"
             except Exception as xe:
                 print(f"[Report] Excel build failed for manager {manager}: {xe}")
@@ -2554,7 +2688,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                           for s in site_down_data.get(circle, [])]
             try:
                 xl_bytes = build_excel_report(circ_rows, report_date, f"Circle Report — {circle}",
-                                              sites_down=circ_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows)
+                                              sites_down=circ_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows, od_op_rows=od_op_rows)
                 xl_name  = f"Circle_Report_{circle.replace(' ', '_').replace('&','and')}_{report_date.replace(' ', '_')}.xlsx"
             except Exception as xe:
                 print(f"[Report] Excel build failed for circle {circle}: {xe}")
@@ -2583,7 +2717,7 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                      for c, sites in site_down_data.items() for s in sites]
         try:
             xl_bytes = build_excel_report(excel_rows, report_date, "All Circles Productivity Report",
-                                          sites_down=all_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows)
+                                          sites_down=all_sites, wfh_wfo_map=_wfh_wfo_map, site_visit_status=_site_visit_status, od_survey_rows=od_survey_rows, od_op_rows=od_op_rows)
             xl_name  = f"Productivity_Report_All_{report_date.replace(' ', '_')}.xlsx"
         except Exception as xe:
             print(f"[Report] Excel build failed for management report: {xe}")
