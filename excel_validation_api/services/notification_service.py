@@ -1462,9 +1462,9 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     if od_op_rows:
         from collections import OrderedDict as _ODOp
         ws_op = wb.create_sheet("OD Operation Form")
-        OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name", "Circle",
+        OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name",
                       "GPS Distance", "Time/Date", "Incident Remark", "Resolved", "Status"]
-        op_widths  = [5, 22, 22, 28, 14, 16, 20, 32, 14, 22]
+        op_widths  = [5, 22, 22, 28, 16, 20, 32, 14, 22]
 
         ws_op.merge_cells(f"A1:{get_column_letter(len(OP_HEADERS))}1")
         tc_op = ws_op["A1"]
@@ -1526,7 +1526,6 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                     rec["full_name"],
                     rec.get("nominal", ""),
                     rec.get("site_name", ""),
-                    rec.get("circle", ""),
                     rec.get("gap", ""),
                     rec.get("time_date", ""),
                     rec.get("incident_remark", ""),
@@ -1537,7 +1536,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                     c = ws_op.cell(row=ri, column=ci, value=val)
                     c.fill      = status_fill if ci == len(OP_HEADERS) else row_fill
                     c.font      = status_font if ci == len(OP_HEADERS) else bod_font()
-                    c.alignment = center() if ci in (1, 6, 9, 10) else left()
+                    c.alignment = center() if ci in (1, 5, 8, 9) else left()
                     c.border    = all_border()
                 ws_op.row_dimensions[ri].height = 22
                 seq_num += 1
