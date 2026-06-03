@@ -35,6 +35,7 @@ const FILE_SLOTS = [
     icon:        FileSpreadsheet,
     freq:        "Monthly / as updated",
     noDateCheck: true,
+    extraSlotGroups: [["employee_2", "managers_2"], ["employee_3", "managers_3"]],
   },
   {
     key:         "attendance",
@@ -43,6 +44,7 @@ const FILE_SLOTS = [
     accept:      ".xlsx,.xls",
     icon:        FileSpreadsheet,
     freq:        "Daily",
+    extraSlotGroups: [["attendance_2"], ["attendance_3"]],
   },
   {
     key:         "distance",
@@ -51,6 +53,7 @@ const FILE_SLOTS = [
     accept:      ".xlsx,.xls",
     icon:        FileSpreadsheet,
     freq:        "Daily",
+    extraSlotGroups: [["distance_2"], ["distance_3"]],
   },
   {
     key:         "forms_combined",
@@ -102,8 +105,9 @@ function relLabel(iso) {
 
 // ── File card ─────────────────────────────────────────────────────────
 
-function FileCard({ slot, statusData, onUpload, uploadingKey, reportDate }) {
-  const inputRef = useRef(null);
+function FileCard({ slot, statusData, onUpload, onRemoveExtra, uploadingKey, reportDate }) {
+  const inputRef    = useRef(null);
+  const extraRefs   = useRef([]);
   const [drag,  setDrag]  = useState(false);
   const [hover, setHover] = useState(false);
 
@@ -116,6 +120,12 @@ function FileCard({ slot, statusData, onUpload, uploadingKey, reportDate }) {
   const stale    = infos.some(i => i.uploaded && !!i.meta) && !fresh;
   const busy     = uploadingKey === slot.key;
   const Icon     = slot.icon;
+
+  // Extra multi-file slots (_2, _3) — only present on employee/attendance/distance
+  const extraGroups = slot.extraSlotGroups || [];
+  const uploadedExtraGroups = extraGroups.filter(g => g.every(k => statusData[k]?.uploaded && statusData[k]?.meta));
+  const nextExtraGroup = extraGroups.find(g => !g.every(k => statusData[k]?.uploaded && statusData[k]?.meta));
+  const busyExtra = nextExtraGroup ? uploadingKey === nextExtraGroup[0] : false;
 
   const skipDateCheck = slot.noDateCheck;
   const dataDate      = meta?.data_date || null;
@@ -254,6 +264,56 @@ function FileCard({ slot, statusData, onUpload, uploadingKey, reportDate }) {
       </div>
 
       <input ref={inputRef} type="file" accept={slot.accept} style={{ display: "none" }} onChange={(e) => pick(e.target.files[0])} />
+
+      {/* Extra files strip — only rendered for slots with extraSlotGroups */}
+      {extraGroups.length > 0 && uploaded && (
+        <div style={{ borderTop: "1px solid #F0F2F7", paddingTop: 5, display: "flex", flexDirection: "column", gap: 3 }}>
+          {uploadedExtraGroups.map((g, i) => {
+            const m = statusData[g[0]]?.meta;
+            const xFresh = isToday(m?.uploaded_at);
+            return (
+              <div key={g[0]} style={{ display: "flex", alignItems: "center", gap: 4, background: xFresh ? "#f0fdf4" : "#f9fafb", border: `1px solid ${xFresh ? "#bbf7d0" : "#E2E8F0"}`, borderRadius: 6, padding: "3px 5px" }}>
+                <FileSpreadsheet size={8} color={xFresh ? "#16a34a" : "#9CA3AF"} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 9.5, fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {m?.original_name || `File ${i + 2}`}
+                </span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemoveExtra && onRemoveExtra(g); }}
+                  title="Remove"
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: "1px 2px", color: "#D1D5DB", display: "flex", alignItems: "center", flexShrink: 0 }}
+                >
+                  <Trash2 size={8} />
+                </button>
+              </div>
+            );
+          })}
+          {nextExtraGroup && (
+            <>
+              <div
+                onClick={() => !busyExtra && extraRefs.current[0]?.click()}
+                style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 5px", borderRadius: 6, border: "1.5px dashed #D8DFE8", background: "#F7F9FC", cursor: busyExtra ? "not-allowed" : "pointer", opacity: busyExtra ? 0.7 : 1 }}
+              >
+                {busyExtra
+                  ? <RefreshCw size={9} color={T.red} style={{ flexShrink: 0, animation: "spin 1s linear infinite" }} />
+                  : <Upload size={9} color="#C4CBD8" style={{ flexShrink: 0 }} />}
+                <span style={{ fontSize: 10, color: busyExtra ? T.red : "#B8C0CC", fontWeight: 500 }}>
+                  {busyExtra ? "Uploading…" : "Add another file"}
+                </span>
+              </div>
+              <input
+                ref={el => { extraRefs.current[0] = el; }}
+                type="file"
+                accept={slot.accept}
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  if (e.target.files[0]) onUpload(nextExtraGroup[0], e.target.files[0], nextExtraGroup);
+                  e.target.value = "";
+                }}
+              />
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -994,14 +1054,15 @@ export default function EmailReports() {
     }
   };
 
-  const handleUpload = async (fileType, file) => {
+  const handleUpload = async (fileType, file, extraKeys) => {
     if (serverOnline !== true) {
       showToast("error", "Backend server is not running. Start uvicorn first.");
       return;
     }
+    // extraKeys: optional array of keys to upload to (for extra file slots on employee/attendance/distance)
     setUploadingKey(fileType);
     const slot = FILE_SLOTS.find((s) => s.key === fileType);
-    const uploadKeys = slot?.combinedKeys || [fileType];
+    const uploadKeys = extraKeys || slot?.combinedKeys || [fileType];
     try {
       await Promise.all(uploadKeys.map(k => {
         const form = new FormData();
@@ -1015,6 +1076,16 @@ export default function EmailReports() {
       showToast("error", e.response?.data?.detail || "Upload failed — please try again.");
     } finally {
       setUploadingKey(null);
+    }
+  };
+
+  const handleRemoveExtra = async (keys) => {
+    try {
+      await Promise.all(keys.map(k => axios.post(`${API}/CLEAR-REPORT-FILE/${k}`)));
+      await fetchStatus();
+      showToast("success", "File removed.");
+    } catch (e) {
+      showToast("error", "Failed to remove file.");
     }
   };
 
@@ -1300,6 +1371,7 @@ export default function EmailReports() {
               slot={slot}
               statusData={status}
               onUpload={handleUpload}
+              onRemoveExtra={handleRemoveExtra}
               uploadingKey={uploadingKey}
               reportDate={reportDate}
             />

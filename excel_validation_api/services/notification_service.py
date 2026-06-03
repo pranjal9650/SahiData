@@ -96,10 +96,18 @@ os.makedirs(DAILY_DIR, exist_ok=True)
 
 DAILY_FILES = {
     "employee":     os.path.join(DAILY_DIR, "employee.xlsx"),
+    "employee_2":   os.path.join(DAILY_DIR, "employee_2.xlsx"),
+    "employee_3":   os.path.join(DAILY_DIR, "employee_3.xlsx"),
     "attendance":   os.path.join(DAILY_DIR, "attendance.xlsx"),
+    "attendance_2": os.path.join(DAILY_DIR, "attendance_2.xlsx"),
+    "attendance_3": os.path.join(DAILY_DIR, "attendance_3.xlsx"),
     "distance":     os.path.join(DAILY_DIR, "distance.xlsx"),
+    "distance_2":   os.path.join(DAILY_DIR, "distance_2.xlsx"),
+    "distance_3":   os.path.join(DAILY_DIR, "distance_3.xlsx"),
     "forms":        os.path.join(DAILY_DIR, "forms.xlsx"),
     "managers":     os.path.join(DAILY_DIR, "managers.xlsx"),
+    "managers_2":   os.path.join(DAILY_DIR, "managers_2.xlsx"),
+    "managers_3":   os.path.join(DAILY_DIR, "managers_3.xlsx"),
     "forms_filled": os.path.join(DAILY_DIR, "forms_filled.xlsx"),
     "alarm":        os.path.join(DAILY_DIR, "alarm.csv"),
     "active_sites": os.path.join(DAILY_DIR, "active_sites.xlsx"),
@@ -1803,6 +1811,40 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
     employee_df.columns   = employee_df.columns.astype(str).str.strip()
     attendance_df.columns = attendance_df.columns.astype(str).str.strip()
 
+    # Merge extra uploaded files (_2 / _3 variants) if they exist
+    for _extra_key in ["distance_2", "distance_3"]:
+        _extra_path = DAILY_FILES.get(_extra_key, "")
+        if _extra_path and os.path.exists(_extra_path):
+            try:
+                _xdf = pd.read_excel(_extra_path)
+                _xdf.columns = _xdf.columns.astype(str).str.strip()
+                distance_df = pd.concat([distance_df, _xdf], ignore_index=True)
+                print(f"[Report] Merged extra file: {_extra_key}")
+            except Exception as _xe:
+                print(f"[Report] Error reading {_extra_key}: {_xe}")
+
+    for _extra_key in ["employee_2", "employee_3"]:
+        _extra_path = DAILY_FILES.get(_extra_key, "")
+        if _extra_path and os.path.exists(_extra_path):
+            try:
+                _xdf = pd.read_excel(_extra_path)
+                _xdf.columns = _xdf.columns.astype(str).str.strip()
+                employee_df = pd.concat([employee_df, _xdf], ignore_index=True)
+                print(f"[Report] Merged extra file: {_extra_key}")
+            except Exception as _xe:
+                print(f"[Report] Error reading {_extra_key}: {_xe}")
+
+    for _extra_key in ["attendance_2", "attendance_3"]:
+        _extra_path = DAILY_FILES.get(_extra_key, "")
+        if _extra_path and os.path.exists(_extra_path):
+            try:
+                _xdf = pd.read_excel(_extra_path)
+                _xdf.columns = _xdf.columns.astype(str).str.strip()
+                attendance_df = pd.concat([attendance_df, _xdf], ignore_index=True)
+                print(f"[Report] Merged extra file: {_extra_key}")
+            except Exception as _xe:
+                print(f"[Report] Error reading {_extra_key}: {_xe}")
+
     # ---- Load site master(s) — build username/name → Status mapping + lat/long master ----
     _site_visit_status: dict = {}
     _site_latlong_master: list = []   # [{site_id, site_name, circle, lat, lng}]
@@ -2115,6 +2157,16 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
         try:
             mgr_df = pd.read_excel(managers_file)
             mgr_df.columns = mgr_df.columns.astype(str).str.strip()
+            for _mk in ["managers_2", "managers_3"]:
+                _mp = DAILY_FILES.get(_mk, "")
+                if _mp and os.path.exists(_mp):
+                    try:
+                        _mxdf = pd.read_excel(_mp)
+                        _mxdf.columns = _mxdf.columns.astype(str).str.strip()
+                        mgr_df = pd.concat([mgr_df, _mxdf], ignore_index=True)
+                        print(f"[Report] Merged extra managers file: {_mk}")
+                    except Exception as _mxe:
+                        print(f"[Report] Error reading {_mk}: {_mxe}")
             mgr_cols = list(mgr_df.columns)
 
             mgr_user_col = _find_col(mgr_cols, [

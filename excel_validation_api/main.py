@@ -85,10 +85,18 @@ os.makedirs(REPORT_DAILY_DIR, exist_ok=True)
 
 REPORT_FILE_MAP = {
     "employee":     "employee.xlsx",
+    "employee_2":   "employee_2.xlsx",
+    "employee_3":   "employee_3.xlsx",
     "attendance":   "attendance.xlsx",
+    "attendance_2": "attendance_2.xlsx",
+    "attendance_3": "attendance_3.xlsx",
     "distance":     "distance.xlsx",
+    "distance_2":   "distance_2.xlsx",
+    "distance_3":   "distance_3.xlsx",
     "forms":        "forms.xlsx",
     "managers":     "managers.xlsx",
+    "managers_2":   "managers_2.xlsx",
+    "managers_3":   "managers_3.xlsx",
     "forms_filled": "forms_filled.xlsx",
     "alarm":        "alarm.csv",
     "active_sites": "active_sites.xlsx",
