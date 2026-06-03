@@ -245,14 +245,19 @@ export default function SiteVisit() {
 
   const [formType, setFormType] = useState("od-survey");
 
-  // Merged flat list of all OD Op master sites (deduped by stsId)
+  // Merged flat list of all OD Op master sites (deduped by stsId, coord'd entry wins)
   const odOpMasterSites = useMemo(() => {
-    const seen = new Set();
-    return odOpMasterFiles.flatMap(f => f.sites.filter(s => {
-      const k = (s.stsId || "").toUpperCase();
-      if (seen.has(k)) return false;
-      seen.add(k); return true;
-    }));
+    const seen = new Map(); // key → site
+    for (const f of odOpMasterFiles) {
+      for (const s of f.sites) {
+        const k = (s.stsId || "").toUpperCase();
+        if (!k) continue;
+        const existing = seen.get(k);
+        // Prefer the entry that has coordinates; don't replace a coord'd entry with a blank one
+        if (!existing || (!existing.lat && s.lat)) seen.set(k, s);
+      }
+    }
+    return [...seen.values()];
   }, [odOpMasterFiles]);
 
   const odOpReady      = odOpMasterFiles.length > 0 && odOpResults.length > 0;
@@ -411,13 +416,14 @@ export default function SiteVisit() {
       for (let i = 1; i < rows.length; i++) {
         const r   = rows[i];
         const id  = String(r[iId] || "").trim();
+        if (!id) continue;
         const lat = parseFloat(r[iLat]), lng = parseFloat(r[iLng]);
-        if (!id || isNaN(lat) || isNaN(lng) || !lat || !lng) continue;
-        if (lat < 6 || lat > 38 || lng < 60 || lng > 100) continue;
-        sites.push({ stsId: id, name: String(r[iName] || "").trim(), lat, lng,
+        const validCoords = !isNaN(lat) && !isNaN(lng) && lat >= 6 && lat <= 38 && lng >= 60 && lng <= 100;
+        sites.push({ stsId: id, name: String(r[iName] || "").trim(),
+          lat: validCoords ? lat : null, lng: validCoords ? lng : null,
           masterRowNum: i + 1, masterFileName: file.name, latColName, lngColName });
       }
-      if (!sites.length) throw new Error("No valid sites with coordinates found");
+      if (!sites.length) throw new Error("No valid site IDs found in master file");
       const uploadedAt = new Date().toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
       setOdOpMasterFiles(prev => [...prev, { id: Date.now().toString(), name: file.name, sites, uploadedAt }]);
       setOdOpResults([]); setOdOpFileName(""); // clear form if master changes
