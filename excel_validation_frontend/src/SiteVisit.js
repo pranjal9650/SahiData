@@ -470,16 +470,27 @@ export default function SiteVisit() {
         const remark    = iRemark   !== -1 ? String(r[iRemark]   || "").trim() : "";
         const resolved  = iResolved !== -1 ? String(r[iResolved] || "").trim() : "";
         const siteType  = iType     !== -1 ? String(r[iType]     || "").trim() : "";
-        // Normalize dashes/underscores so ST_DELHI_HPSC_327 == ST-DELHI-HPSC-327
+        // Normalize: lowercase + collapse dashes/underscores to "-"
         const _nid = s => s.toLowerCase().replace(/[-_]/g, "-").trim();
         const nomNorm  = _nid(nominal);
-        // Also try just the first word — handles "ST-DELHI-HPSC-198 HPSC_Tilak Nagar..." compound entries
+        const nomLow   = nominal.toLowerCase().trim();
+        // First word handles "ST-DELHI-HPSC-198 HPSC_Tilak Nagar..." compound entries
         const nomFirst = _nid(nominal.split(/\s+/)[0]);
         const matchedSite = odOpMasterSites.find(s => {
           const mId   = _nid(s.stsId || "");
           const mName = (s.name || "").trim().toLowerCase();
-          return (mId   && (mId === nomNorm || mId === nomFirst)) ||
-                 (mName && mName === nominal.toLowerCase().trim());
+          // 1. Exact normalized ID match (handles _ vs - variants)
+          if (mId && (mId === nomNorm || mId === nomFirst)) return true;
+          // 2. Exact name match
+          if (mName && mName === nomLow) return true;
+          // 3. Master ID/name starts with nominal
+          //    e.g. "Raheja Residency" matches "Raheja Residency, Malad,"
+          if (mId   && nomNorm.length >= 6 && mId.startsWith(nomNorm))   return true;
+          if (mName && nomNorm.length >= 6 && mName.startsWith(nomNorm)) return true;
+          // 4. Nominal starts with master ID (user added extra text after the ID)
+          //    e.g. "ST-DELHI-HPSC-198 extra" matches master ID "ST-DELHI-HPSC-198"
+          if (mId && mId.length >= 8 && nomNorm.startsWith(mId)) return true;
+          return false;
         });
         parsed.push({ nominal, userName, timeStr, remark, resolved, siteType,
           siteName: matchedSite?.name || "", circle: matchedSite?.circle || "",
