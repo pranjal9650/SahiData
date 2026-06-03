@@ -1542,12 +1542,16 @@ export default function SiteVisit() {
                     <td style={{ padding:"10px 13px",fontFamily:"monospace",fontSize:12,color:T.red,fontWeight:600 }}>{r.nominal}</td>
                     <td style={{ padding:"10px 13px",fontSize:12 }}>{r.siteName||"—"}</td>
                     <td style={{ padding:"10px 13px",fontSize:11.5 }}>
-                      {r.gpsVerified && r.closestPing ? (
+                      {r.closestPing ? (
                         <div style={{ display:"flex",flexDirection:"column",gap:2 }}>
-                          <span style={{ color:T.blue,fontFamily:"monospace" }}>{r.closestPing.lat.toFixed(5)}, {r.closestPing.lng.toFixed(5)}</span>
-                          <span style={{ color:T.green,fontFamily:"monospace" }}>{r.siteLat?.toFixed(5)}, {r.siteLng?.toFixed(5)}</span>
+                          <span style={{ color:r.gpsVerified?T.blue:T.red, fontFamily:"monospace" }}>{r.closestPing.lat.toFixed(5)}, {r.closestPing.lng.toFixed(5)}</span>
+                          {r.siteLat != null && <span style={{ color:r.gpsVerified?T.green:T.grey500, fontFamily:"monospace" }}>{r.siteLat.toFixed(5)}, {r.siteLng.toFixed(5)}</span>}
                         </div>
-                      ) : r.matched ? <span style={{ color:T.grey500,fontSize:11 }}>No GPS ping near site</span> : "—"}
+                      ) : r.matched ? (
+                        <span style={{ color:T.grey500,fontSize:11 }}>
+                          {r.siteLat != null ? "No GPS data for this person" : "Site has no coordinates"}
+                        </span>
+                      ) : "—"}
                     </td>
                     <td style={{ padding:"10px 13px",fontSize:11,color:T.grey500 }}>
                       {r.matched && r.masterFileName ? `${r.masterFileName} · Row ${r.masterRowNum} · ${r.latColName}/${r.lngColName}` : "—"}
