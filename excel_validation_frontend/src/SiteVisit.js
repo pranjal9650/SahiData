@@ -948,14 +948,14 @@ export default function SiteVisit() {
 
   function downloadOdOpReport() {
     if (!activeReport?.odOpRows?.length) return;
-    const hdrs = ["#","Person","Nominal (Site ID)","Site Name","Circle","Type of Site","Incident Remark","Problem Resolved","Time/Date","GPS Status","GPS Distance"];
+    const hdrs = ["#","Person","Nominal (Site ID)","Site Name","Type of Site","Incident Remark","Problem Resolved","Time/Date","GPS Status","GPS Distance"];
     const data = activeReport.odOpRows.map((r, i) => [
-      i + 1, r.userName, r.nominal, r.siteName, r.circle, r.siteType,
+      i + 1, r.userName, r.nominal, r.siteName, r.siteType,
       r.remark, r.resolved, r.timeStr, r.gpsStatus,
       r.gpsDist != null ? (r.gpsDist < 1000 ? r.gpsDist + " m" : (r.gpsDist / 1000).toFixed(1) + " km") : "—",
     ]);
     const xlWs = XLSX.utils.aoa_to_sheet([hdrs, ...data]);
-    xlWs["!cols"] = [5,20,22,30,14,14,30,14,20,22,14].map(wch => ({ wch }));
+    xlWs["!cols"] = [5,20,22,30,14,30,14,20,22,14].map(wch => ({ wch }));
     const xlWb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(xlWb, xlWs, "OD Operation");
     XLSX.writeFile(xlWb, "OD_Operation_GPS_Verified.xlsx");
