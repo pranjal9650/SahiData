@@ -978,7 +978,9 @@ export default function SiteVisit() {
             ? (r.matched && r.odVerified)
             : (!statusFilter || r.status === statusFilter);
           // Default: 3-way verified (GPS + OD); "3-Way Verified only" option is same strict check
-          const odFilter = activeReportHasOd && !statusFilter ? (r.matched && r.odVerified) : statusMatch;
+          const odFilter = activeReportHasOd && !statusFilter
+            ? (r.odVerified || r.odSurveyLat != null)
+            : statusMatch;
           return odFilter;
         }
         return false;
@@ -1416,7 +1418,7 @@ export default function SiteVisit() {
             </div>
             <select value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)}
               style={{ padding:"7px 12px",border:`1px solid ${T.border}`,borderRadius:8,fontSize:13,fontFamily:"inherit",outline:"none",background:"#fafafa",color:T.black,cursor:"pointer" }}>
-              <option value="">{activeReportHasOd ? "3-Way Verified (default)" : "All Statuses"}</option>
+              <option value="">{activeReportHasOd ? "All OD Entries" : "All Statuses"}</option>
               {activeReportHasOd && <option value="3-Way Verified">3-Way Verified only</option>}
             </select>
             <span style={{ fontSize:12,color:T.grey500,whiteSpace:"nowrap" }}>{displayRows.length} of {activeReport.rows.length} rows</span>
@@ -1509,7 +1511,7 @@ export default function SiteVisit() {
       )}
 
       {/* ── OD Operation GPS Results ───────────────────────────────── */}
-      {activeReport?.hasOdOp && activeReport.odOpRows?.length > 0 && (
+      {formType === "od-operation" && activeReport?.hasOdOp && activeReport.odOpRows?.length > 0 && (
         <div style={card}>
           <div style={cardHeader}>
             <div>
