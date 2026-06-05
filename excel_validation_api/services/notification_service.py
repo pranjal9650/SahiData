@@ -1407,9 +1407,26 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             person_groups.setdefault(key, []).append(r)
             existing = person_display.get(key, "")
             new_name = r["full_name"]
-            # Prefer the name without _st suffix (shorter = cleaner display name)
             if not existing or len(new_name) < len(existing):
                 person_display[key] = new_name
+
+        # Merge groups where one key is a 5+ char prefix of another
+        # e.g. "sachin" (from "Sachin") and "sachinc" (from "sachinc_st") → same person
+        _sk = sorted(person_groups.keys(), key=len)
+        _absorbed = set()
+        for _i, _k1 in enumerate(_sk):
+            if _k1 in _absorbed or len(_k1) < 5:
+                continue
+            for _k2 in _sk[_i+1:]:
+                if _k2 in _absorbed:
+                    continue
+                if _k2.startswith(_k1):
+                    person_groups[_k1].extend(person_groups[_k2])
+                    person_display[_k1] = person_display.get(_k1) or person_display.get(_k2, _k1)
+                    _absorbed.add(_k2)
+        for _k in _absorbed:
+            person_groups.pop(_k, None)
+            person_display.pop(_k, None)
 
         row_idx = 3
         for key, recs in person_groups.items():
@@ -1507,6 +1524,22 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             new_name = r["full_name"]
             if not existing or len(new_name) < len(existing):
                 op_display[key] = new_name
+
+        _sk2 = sorted(op_groups.keys(), key=len)
+        _abs2 = set()
+        for _i, _k1 in enumerate(_sk2):
+            if _k1 in _abs2 or len(_k1) < 5:
+                continue
+            for _k2 in _sk2[_i+1:]:
+                if _k2 in _abs2:
+                    continue
+                if _k2.startswith(_k1):
+                    op_groups[_k1].extend(op_groups[_k2])
+                    op_display[_k1] = op_display.get(_k1) or op_display.get(_k2, _k1)
+                    _abs2.add(_k2)
+        for _k in _abs2:
+            op_groups.pop(_k, None)
+            op_display.pop(_k, None)
 
         seq_num = 1
         row_idx = 3
