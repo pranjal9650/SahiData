@@ -1471,8 +1471,8 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         from collections import OrderedDict as _ODOp
         ws_op = wb.create_sheet("OD Operation Form")
         OP_HEADERS = ["#", "Person", "Nominal (Site ID)", "Site Name",
-                      "GPS Distance", "Time/Date", "Incident Remark", "Resolved", "Status"]
-        op_widths  = [5, 22, 22, 28, 16, 20, 32, 14, 22]
+                      "Employee GPS → Master GPS", "GPS Distance", "Time/Date", "Incident Remark", "Resolved", "Status"]
+        op_widths  = [5, 22, 22, 28, 30, 16, 20, 32, 14, 22]
 
         ws_op.merge_cells(f"A1:{get_column_letter(len(OP_HEADERS))}1")
         tc_op = ws_op["A1"]
@@ -1529,11 +1529,15 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 status_font = OP_GREEN_FONT if is_visited else OP_RED_FONT
                 row_fill    = alt_fill(ri)
 
+                emp_gps    = rec.get("employee_gps", "")
+                master_gps = rec.get("master_gps", "")
+                gps_cell   = f"{emp_gps}\n{master_gps}".strip() if (emp_gps or master_gps) else ""
                 vals = [
                     seq_num,
                     rec["full_name"],
                     rec.get("nominal", ""),
                     rec.get("site_name", ""),
+                    gps_cell,
                     rec.get("gap", ""),
                     rec.get("time_date", ""),
                     rec.get("incident_remark", ""),
@@ -1544,9 +1548,11 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                     c = ws_op.cell(row=ri, column=ci, value=val)
                     c.fill      = status_fill if ci == len(OP_HEADERS) else row_fill
                     c.font      = status_font if ci == len(OP_HEADERS) else bod_font()
-                    c.alignment = center() if ci in (1, 5, 8, 9) else left()
+                    c.alignment = center() if ci in (1, 6, 9, 10) else left()
+                    if ci == 5:  # GPS cell — wrap text so both lines show
+                        c.alignment = Alignment(wrap_text=True, vertical="top")
                     c.border    = all_border()
-                ws_op.row_dimensions[ri].height = 22
+                ws_op.row_dimensions[ri].height = 30 if gps_cell and "\n" in gps_cell else 22
                 seq_num += 1
 
             row_idx += len(recs)
@@ -1930,6 +1936,8 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                             "resolved":        _clean(_g(_sm_resolved_col)),
                             "status":          _clean(_raw_status),
                             "row_num":         _clean(_g(_sm_rownum_col)),
+                            "employee_gps":    _clean(_g(_sm_emp_gps_col)),
+                            "master_gps":      _clean(_g(_sm_master_gps_col)),
                         })
 
                 # Extract OD Survey rows if this is a Site Visit export
