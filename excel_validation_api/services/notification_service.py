@@ -1154,11 +1154,13 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     ws2 = wb.create_sheet("Summary")
     from collections import defaultdict, OrderedDict
 
-    # ── Build OD survey plan/visited counts per person ──────────────
+    # ── Build OD survey + OD operation plan/visited counts per person ──
     def _norm_person(name):
         return re.sub(r'_st[sn]?$', '', str(name), flags=re.IGNORECASE).strip().lower()
 
     od_person_counts = {}   # norm_key → {"plan": N, "visited": M}
+
+    # From OD Survey rows
     for _odr in (od_survey_rows or []):
         _k = _norm_person(_odr.get("full_name", ""))
         if not _k:
@@ -1168,8 +1170,18 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         if _odr.get("remark") == "Site Visited":
             od_person_counts[_k]["visited"] += 1
 
+    # From OD Operation rows
+    for _opr in (od_op_rows or []):
+        _k = _norm_person(_opr.get("full_name", ""))
+        if not _k:
+            continue
+        od_person_counts.setdefault(_k, {"plan": 0, "visited": 0})
+        od_person_counts[_k]["plan"] += 1
+        if "visited" in str(_opr.get("status", "")).lower():
+            od_person_counts[_k]["visited"] += 1
+
     def _lookup_od(fname, uname):
-        """Try multiple name forms to find OD survey data for an employee."""
+        """Try multiple name forms to find OD data for an employee."""
         fk = _norm_person(fname)
         uk = _norm_person(uname)
         # 1. Exact full name match
@@ -1178,13 +1190,13 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         # 2. Exact username match
         if uk in od_person_counts:
             return od_person_counts[uk]
-        # 3. First-name prefix: "adesh" matches "adesh kumar patel"
+        # 3. First-name prefix match (e.g. "adesh" in "adesh kumar patel")
         fname_first = fk.split()[0] if fk else ""
         if len(fname_first) >= 4:
             for k, v in od_person_counts.items():
                 if k.split()[0] == fname_first:
                     return v
-        # 4. Username first word matches OD key first word
+        # 4. Username first word vs OD key first word
         uk_first = uk.split()[0] if uk else ""
         if len(uk_first) >= 4:
             for k, v in od_person_counts.items():
