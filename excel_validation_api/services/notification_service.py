@@ -2083,6 +2083,18 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
           f"manager: '{manager_col}', circle: '{circle_col}', "
           f"name: '{full_name_col}', email: '{email_col}'")
 
+    # ---- Filter: keep only Active employees ----
+    _status_col = _find_col(emp_cols, [
+        "Field Executive Status", "FE Status", "Employee Status", "Status", "Active Status",
+    ])
+    if _status_col:
+        _before = len(employee_df)
+        employee_df = employee_df[
+            employee_df[_status_col].astype(str).str.strip().str.lower()
+            .isin(["active", "1", "yes", "enabled", "true"])
+        ].copy()
+        print(f"[Report] Active filter on '{_status_col}': {_before} → {len(employee_df)} employees")
+
     # ---- Normalize usernames ----
     distance_df["Username"] = (
         distance_df["Username"].astype(str).str.strip().str.lower()
