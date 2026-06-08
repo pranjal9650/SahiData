@@ -1313,7 +1313,7 @@ export default function SiteVisit() {
               <label style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 12px",border:`1px dashed ${T.red}`,borderRadius:8,cursor:"pointer",background:T.redLight,color:T.red,fontSize:13,fontWeight:500 }}>
                 <Upload size={15}/>
                 <span style={{ overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{queueFileName || "Choose file…"}</span>
-                <input ref={queueFileRef} type="file" accept=".xlsx,.xls,.csv" required style={{ display:"none" }}
+                <input ref={queueFileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display:"none" }}
                   onChange={(e)=>setQueueFileName(e.target.files[0]?.name||"")}/>
               </label>
             </div>
