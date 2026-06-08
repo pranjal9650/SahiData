@@ -1261,7 +1261,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     _t = ws2["A1"]
     _t.value = f"Employee productivity analysis - {report_date}"
     _t.font  = Font(bold=True, color=BLUE, name="Calibri", size=12)
-    _t.alignment = Alignment(horizontal="left", vertical="center")
+    _t.alignment = Alignment(horizontal="center", vertical="center")
     _t.fill = PatternFill("solid", fgColor="EFF6FF")
     ws2.row_dimensions[1].height = 20
 
@@ -2587,7 +2587,14 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
 
     # Priority 1: site_master upload is a Site Visit export (has "OD Verified" column)
     if _sm_od_rows:
-        od_survey_rows = _sm_od_rows
+        # Deduplicate by person + site_id
+        _seen_od = set()
+        od_survey_rows = []
+        for _r in _sm_od_rows:
+            _k = (str(_r.get("full_name","")).strip().lower(), str(_r.get("site_id","")).strip().lower())
+            if _k not in _seen_od:
+                _seen_od.add(_k)
+                od_survey_rows.append(_r)
         print(f"[OD Survey] Loaded {len(od_survey_rows)} rows from site_master (Site Visit export) — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
 
     # Priority 2: upload_history DB records
@@ -2628,8 +2635,14 @@ def _run_report(attendance_file, distance_file, employee_file, alarm_file=None,
                 })
         print(f"[OD Survey] Built {len(od_survey_rows)} rows — {sum(1 for r in od_survey_rows if r['remark'].startswith('Valid'))} valid")
 
-    # OD Operation rows — from site_master uploads only
-    od_op_rows = _sm_od_op_rows if _sm_od_op_rows else []
+    # OD Operation rows — from site_master uploads only (deduplicate by person+nominal)
+    _seen_op = set()
+    od_op_rows = []
+    for _r in _sm_od_op_rows:
+        _k = (str(_r.get("full_name","")).strip().lower(), str(_r.get("nominal","")).strip().lower())
+        if _k not in _seen_op:
+            _seen_op.add(_k)
+            od_op_rows.append(_r)
     if od_op_rows:
         print(f"[OD Operation] Loaded {len(od_op_rows)} rows from site_master (OD Operation export)")
 
