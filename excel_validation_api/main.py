@@ -4039,7 +4039,25 @@ async def wfh_wfo_analyze(files: List[UploadFile] = File(...)):
             results.append({"file": filename, "error": str(e)})
 
     os.makedirs("data", exist_ok=True)
-    with open(WFH_WFO_RESULTS_PATH, "w", encoding="utf-8") as f:
-        json.dump({"results": results, "analyzed_at": datetime.now().isoformat()}, f, indent=2)
 
-    return {"results": results}
+    # Merge with existing results — new upload updates/adds, never erases previous ones
+    existing = {}
+    if os.path.exists(WFH_WFO_RESULTS_PATH):
+        try:
+            with open(WFH_WFO_RESULTS_PATH, encoding="utf-8") as f:
+                _prev = json.load(f)
+            for r in _prev.get("results", []):
+                if r.get("username"):
+                    existing[r["username"]] = r
+        except Exception:
+            pass
+
+    for r in results:
+        if r.get("username"):
+            existing[r["username"]] = r   # new result overwrites same username
+
+    merged = list(existing.values())
+    with open(WFH_WFO_RESULTS_PATH, "w", encoding="utf-8") as f:
+        json.dump({"results": merged, "analyzed_at": datetime.now().isoformat()}, f, indent=2)
+
+    return {"results": merged}
