@@ -2,7 +2,7 @@
 # FASTAPI — FULLY DYNAMIC VERSION
 # =====================================================
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Depends, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -3624,6 +3624,38 @@ def clear_report_file(file_type: str):
                 json.dump(meta_store, f, indent=2)
 
     return {"status": "success", "cleared": file_type}
+
+
+# =====================================================
+# AUTO-DEPLOY WEBHOOK
+# =====================================================
+
+DEPLOY_SECRET = os.environ.get("DEPLOY_SECRET", "sahi-deploy-2026")
+PROJECT_DIR   = "/home/ubuntu/SahiData"
+
+@app.post("/webhook/deploy")
+async def deploy_webhook(request: Request):
+    import hmac, hashlib, subprocess
+
+    body      = await request.body()
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    expected  = "sha256=" + hmac.new(DEPLOY_SECRET.encode(), body, hashlib.sha256).hexdigest()
+
+    if not hmac.compare_digest(signature, expected):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    def _deploy():
+        try:
+            subprocess.run(["git", "-C", PROJECT_DIR, "fetch", "origin"], check=True)
+            subprocess.run(["git", "-C", PROJECT_DIR, "reset", "--hard", "origin/master"], check=True)
+            subprocess.run(["pm2", "reload", "sahi-backend"], check=True)
+            print("[Deploy] Success")
+        except Exception as e:
+            print(f"[Deploy] Error: {e}")
+
+    import threading
+    threading.Thread(target=_deploy, daemon=True).start()
+    return {"status": "deploying"}
 
 
 # =====================================================
