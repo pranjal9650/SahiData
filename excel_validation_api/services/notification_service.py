@@ -1268,16 +1268,17 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     )
 
     # ── Styles ───────────────────────────────────────────────────────
-    CIRCLE_FILL  = PatternFill("solid", fgColor="DBEAFE")   # light blue
-    BIZ_FILL     = PatternFill("solid", fgColor="EFF6FF")   # lighter blue
-    REMARK_FILL  = PatternFill("solid", fgColor="F9FAFB")   # very light grey
+    CIRCLE_FILL  = PatternFill("solid", fgColor="FCE4D6")   # orange accent 2 lighter 80%
+    BIZ_FILL     = PatternFill("solid", fgColor="EFF6FF")   # light blue (business domain)
+    EMP_FILL     = PatternFill("solid", fgColor="E2EFDA")   # green accent 6 lighter 80%
+    REMARK_FILL  = PatternFill("solid", fgColor="FFFFFF")   # white
     GRAND_FILL   = PatternFill("solid", fgColor=BLUE)
 
-    circle_font  = Font(bold=True, color=BLUE,  name="Calibri", size=10)
-    biz_font     = Font(bold=True, color=DARK,  name="Calibri", size=10)
-    emp_font     = Font(color=DARK,             name="Calibri", size=10)
-    remark_font  = Font(color="6B7280",         name="Calibri", size=9, italic=True)
-    grand_font   = Font(bold=True, color=WHITE, name="Calibri", size=10)
+    circle_font  = Font(bold=True, color="843C0C", name="Calibri", size=10)
+    biz_font     = Font(bold=True, color=DARK,     name="Calibri", size=10)
+    emp_font     = Font(bold=True, color="375623", name="Calibri", size=10)
+    remark_font  = Font(color="4B5563",            name="Calibri", size=10)
+    grand_font   = Font(bold=True, color=WHITE,    name="Calibri", size=10)
 
     def _cv(ws2, row, col, val, font, fill, align="left", border=None):
         c = ws2.cell(row=row, column=col, value=val if val not in ("", None, 0) or isinstance(val, int) else None)
@@ -1346,15 +1347,14 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             cur_row += 1
 
             for ei, emp in enumerate(emps):
-                _ef = alt_fill(ei)
                 # Employee name row
                 re_ = ws2.cell(row=cur_row, column=1, value=emp["name"])
-                re_.font = emp_font; re_.fill = _ef
+                re_.font = emp_font; re_.fill = EMP_FILL
                 re_.alignment = Alignment(horizontal="center", vertical="center")
                 re_.border = thin_b
                 for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
                     c = ws2.cell(row=cur_row, column=ci, value=v)
-                    c.font = emp_font; c.fill = _ef
+                    c.font = emp_font; c.fill = EMP_FILL
                     c.alignment = Alignment(horizontal="center", vertical="center")
                     c.border = thin_b
                 ws2.row_dimensions[cur_row].height = 16
