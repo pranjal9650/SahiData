@@ -3648,7 +3648,7 @@ async def deploy_webhook(request: Request):
         try:
             subprocess.run(["git", "-C", PROJECT_DIR, "fetch", "origin"], check=True)
             subprocess.run(["git", "-C", PROJECT_DIR, "reset", "--hard", "origin/master"], check=True)
-            subprocess.run(["pm2", "reload", "sahi-backend"], check=True)
+            subprocess.run(["/home/ubuntu/deploy.sh"], check=True)
             print("[Deploy] Success")
         except Exception as e:
             print(f"[Deploy] Error: {e}")
