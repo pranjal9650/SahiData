@@ -1176,22 +1176,24 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         _att = str(att).strip().lower()
         if _att in ("a", "absent", "--", "-", ""):
             return "On Leave"
+        # If employee has actual site-visit data, show site remark (not WFH/WFO)
+        if plan > 0:
+            if sm_stat and str(sm_stat).strip().lower() not in ("nan", "none", ""):
+                return str(sm_stat).strip()
+            if visited == plan:
+                return "Verified, site location matched"
+            if visited == 0:
+                return "Site location not matched"
+            p_w = _NUM.get(plan, str(plan))
+            v_w = _NUM.get(visited, str(visited))
+            return (f"Planned for {p_w} sites, but the site visited only "
+                    f"{v_w} site{'s' if visited != 1 else ''}")
+        # No site plan — show attendance/GPS status
         if gps in ("WFH", "WFO"):
             return gps
-        if sm_stat:
-            _sm = str(sm_stat).strip()
-            if _sm.lower() not in ("nan", "none", ""):
-                return _sm
-        if plan == 0:
-            return "Plan not shared"
-        if visited == plan:
-            return "Verified, site location matched"
-        if visited == 0:
-            return "Site location not matched"
-        p_w = _NUM.get(plan, str(plan))
-        v_w = _NUM.get(visited, str(visited))
-        return (f"Planned for {p_w} sites, but the site visited only "
-                f"{v_w} site{'s' if visited != 1 else ''}")
+        if sm_stat and str(sm_stat).strip().lower() not in ("nan", "none", ""):
+            return str(sm_stat).strip()
+        return "Plan not shared"
 
     circle_biz_emps = OrderedDict()   # circle → biz → [emp_dict]
 
@@ -1213,9 +1215,8 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             plan    = od["plan"]
             visited = od["visited"]
         else:
-            plan    = int(row.get("forms_count", 0) or 0)
-            _verified = sm_stat and ("verif" in str(sm_stat).lower() or "work done" in str(sm_stat).lower())
-            visited = plan if _verified else 0
+            plan    = 0
+            visited = 0
 
         remark = _remark(att, gps, plan, visited, sm_stat)
 
@@ -1255,33 +1256,24 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                     bottom=Side(style="thin", color="E5E7EB"))
 
     # ── Write rows ───────────────────────────────────────────────────
-    # Row 1: Date header
+    # Row 1: Title
     ws2.merge_cells("A1:C1")
-    _d = ws2["A1"]
-    _d.value = f"Date\t{report_date}"
-    _d.font  = Font(bold=True, color=DARK, name="Calibri", size=10)
-    _d.alignment = Alignment(horizontal="left", vertical="center")
-    _d.fill = PatternFill("solid", fgColor="EFF6FF")
-    ws2.row_dimensions[1].height = 18
-
-    # Row 2: Title
-    ws2.merge_cells("A2:C2")
-    _t = ws2["A2"]
+    _t = ws2["A1"]
     _t.value = f"Employee productivity analysis - {report_date}"
     _t.font  = Font(bold=True, color=BLUE, name="Calibri", size=12)
     _t.alignment = Alignment(horizontal="left", vertical="center")
     _t.fill = PatternFill("solid", fgColor="EFF6FF")
-    ws2.row_dimensions[2].height = 20
+    ws2.row_dimensions[1].height = 20
 
-    # Row 3: Column headers
+    # Row 2: Column headers
     for ci, h in enumerate(["Row Labels", "Number of site plan", "Number of site visited"], 1):
-        c = ws2.cell(row=3, column=ci, value=h)
+        c = ws2.cell(row=2, column=ci, value=h)
         c.font = hdr_font(); c.fill = hdr_fill()
         c.alignment = Alignment(horizontal="center" if ci > 1 else "left", vertical="center")
         c.border = thin_b
-    ws2.row_dimensions[3].height = 22
+    ws2.row_dimensions[2].height = 22
 
-    cur_row   = 4
+    cur_row   = 3
     grand_plan = 0
     grand_vis  = 0
 
@@ -1291,7 +1283,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         grand_plan += c_plan; grand_vis += c_vis
 
         # Circle row
-        for ci, v in [(1, circle), (2, c_plan or None), (3, c_vis or None)]:
+        for ci, v in [(1, circle), (2, c_plan), (3, c_vis)]:
             c = ws2.cell(row=cur_row, column=ci, value=v)
             c.font = circle_font; c.fill = CIRCLE_FILL
             c.alignment = Alignment(horizontal="left" if ci == 1 else "center", vertical="center")
@@ -1309,7 +1301,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             rb.alignment = Alignment(horizontal="left", vertical="center", indent=1)
             rb.border = thin_b
             for ci, v in [(2, b_plan), (3, b_vis)]:
-                c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                c = ws2.cell(row=cur_row, column=ci, value=v)
                 c.font = biz_font; c.fill = BIZ_FILL
                 c.alignment = Alignment(horizontal="center", vertical="center")
                 c.border = thin_b
@@ -1324,7 +1316,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 re_.alignment = Alignment(horizontal="left", vertical="center", indent=2)
                 re_.border = thin_b
                 for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
-                    c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                    c = ws2.cell(row=cur_row, column=ci, value=v)
                     c.font = emp_font; c.fill = _ef
                     c.alignment = Alignment(horizontal="center", vertical="center")
                     c.border = thin_b
@@ -1337,7 +1329,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 rr.alignment = Alignment(horizontal="left", vertical="center", indent=3)
                 rr.border = thin_b
                 for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
-                    c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                    c = ws2.cell(row=cur_row, column=ci, value=v)
                     c.font = remark_font; c.fill = REMARK_FILL
                     c.alignment = Alignment(horizontal="center", vertical="center")
                     c.border = thin_b
@@ -1350,7 +1342,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     gt.alignment = Alignment(horizontal="left", vertical="center")
     gt.border = thin_b
     for ci, v in [(2, grand_plan), (3, grand_vis)]:
-        c = ws2.cell(row=cur_row, column=ci, value=v or None)
+        c = ws2.cell(row=cur_row, column=ci, value=v)
         c.font = grand_font; c.fill = GRAND_FILL
         c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = thin_b
@@ -1359,7 +1351,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     ws2.column_dimensions["A"].width = 42
     ws2.column_dimensions["B"].width = 22
     ws2.column_dimensions["C"].width = 22
-    ws2.freeze_panes = "A4"
+    ws2.freeze_panes = "A3"
 
     # ── Sheet 3: Sites Down (optional, blue/white theme) ─────────────
     if sites_down is not None:
