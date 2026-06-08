@@ -3130,6 +3130,7 @@ def get_reporting_config():
     cfg.setdefault("extra_recipients", [])
     cfg.setdefault("managers", [])
     cfg.setdefault("management_recipients", [])
+    cfg.setdefault("archived_management_recipients", [])
     return cfg
 
 @app.post("/REPORTING-CONFIG/CIRCLE-HEADS")
@@ -3233,11 +3234,37 @@ def add_management_recipient(body: ManagementRecipientBody):
 def delete_management_recipient(email: str):
     from services.notification_service import _read_config, _write_config
     cfg = _read_config()
-    cfg["management_recipients"] = [
-        r for r in cfg.get("management_recipients", []) if r["email"] != email
-    ]
+    to_remove = [r for r in cfg.get("management_recipients", []) if r["email"] == email]
+    cfg["management_recipients"] = [r for r in cfg.get("management_recipients", []) if r["email"] != email]
+    # Archive instead of hard-delete
+    archived = cfg.setdefault("archived_management_recipients", [])
+    for r in to_remove:
+        if not any(a["email"] == r["email"] for a in archived):
+            archived.append(r)
     _write_config(cfg)
-    return {"status": "ok", "management_recipients": cfg["management_recipients"]}
+    return {"status": "ok", "management_recipients": cfg["management_recipients"],
+            "archived_management_recipients": cfg["archived_management_recipients"]}
+
+@app.post("/REPORTING-CONFIG/MANAGEMENT/RESTORE/{email:path}")
+def restore_management_recipient(email: str):
+    from services.notification_service import _read_config, _write_config
+    cfg = _read_config()
+    archived = cfg.get("archived_management_recipients", [])
+    to_restore = next((r for r in archived if r["email"] == email), None)
+    if not to_restore:
+        raise HTTPException(status_code=404, detail="Archived recipient not found")
+    cfg["archived_management_recipients"] = [r for r in archived if r["email"] != email]
+    cfg.setdefault("management_recipients", [])
+    if not any(r["email"] == email for r in cfg["management_recipients"]):
+        cfg["management_recipients"].append(to_restore)
+    _write_config(cfg)
+    return {"status": "ok", "management_recipients": cfg["management_recipients"],
+            "archived_management_recipients": cfg["archived_management_recipients"]}
+
+@app.get("/REPORTING-CONFIG/MANAGEMENT/ARCHIVE")
+def get_archived_management_recipients():
+    from services.notification_service import _read_config
+    return {"archived_management_recipients": _read_config().get("archived_management_recipients", [])}
 
 @app.put("/REPORTING-CONFIG/MANAGEMENT/{email:path}")
 def update_management_recipient(email: str, body: ManagementRecipientBody):

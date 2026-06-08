@@ -756,9 +756,11 @@ export default function EmailReports() {
   const [editingHead,     setEditingHead]     = useState(null);
   const [headForm,        setHeadForm]        = useState({ circle:"", head:"", email:"", phone:"" });
   const [showAddHead,     setShowAddHead]     = useState(false);
-  const [showAddMgmt,     setShowAddMgmt]     = useState(false);
-  const [editingMgmt,     setEditingMgmt]     = useState(null);
-  const [mgmtForm,        setMgmtForm]        = useState({ name:"", email:"" });
+  const [showAddMgmt,       setShowAddMgmt]       = useState(false);
+  const [editingMgmt,       setEditingMgmt]       = useState(null);
+  const [mgmtForm,          setMgmtForm]          = useState({ name:"", email:"" });
+  const [archivedMgmt,      setArchivedMgmt]      = useState([]);
+  const [showPastMgmt,      setShowPastMgmt]      = useState(false);
   const [editingManager,  setEditingManager]  = useState(null);
   const [managerForm,     setManagerForm]     = useState({ name:"", email:"", circle:"" });
   const [showAddManager,  setShowAddManager]  = useState(false);
@@ -801,6 +803,7 @@ export default function EmailReports() {
       if (cfgRes.status === "fulfilled") {
         setConfig(cfgRes.value.data);
         setExtraInput((cfgRes.value.data.extra_recipients || []).join(", "));
+        setArchivedMgmt(cfgRes.value.data.archived_management_recipients || []);
       }
       if (mailRes.status === "fulfilled") {
         setMailEnabled(mailRes.value.data.mail_enabled);
@@ -845,6 +848,7 @@ export default function EmailReports() {
       const { data } = await axios.get(`${API}/REPORTING-CONFIG`);
       setConfig(data);
       setExtraInput((data.extra_recipients || []).join(", "));
+      setArchivedMgmt(data.archived_management_recipients || []);
     } catch { /* silent */ }
     finally { configFetchRef.current = false; setConfigLoading(false); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1620,6 +1624,50 @@ export default function EmailReports() {
                   </div>
                 )}
               </div>
+
+              {/* Past Members section */}
+              {archivedMgmt.length > 0 && (
+                <div style={{ marginTop:12 }}>
+                  <button
+                    onClick={() => setShowPastMgmt(p => !p)}
+                    style={{ background:"none", border:"none", cursor:"pointer", padding:0,
+                      fontSize:12, color:T.grey500, display:"flex", alignItems:"center", gap:5, fontFamily:"inherit" }}
+                  >
+                    {showPastMgmt ? "▲" : "▼"} Past Members ({archivedMgmt.length})
+                  </button>
+                  {showPastMgmt && (
+                    <div style={{ marginTop:8, border:"1px solid #F0F2F7", borderRadius:8, overflow:"hidden" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr auto", gap:6,
+                        padding:"6px 14px", background:"#F8FAFC", fontSize:10, fontWeight:700,
+                        color:T.grey500, textTransform:"uppercase", letterSpacing:"0.4px" }}>
+                        <span>Name</span><span>Email</span><span>Action</span>
+                      </div>
+                      {archivedMgmt.map((m, i) => (
+                        <div key={m.email} style={{ display:"grid", gridTemplateColumns:"1fr 1.5fr auto",
+                          padding:"8px 14px", gap:12, alignItems:"center",
+                          borderTop: i===0 ? "none" : "1px solid #F3F4F6", background:"#FAFAFA" }}>
+                          <span style={{ fontSize:12.5, color:"#9CA3AF", fontStyle:"italic" }}>{m.name}</span>
+                          <span style={{ fontSize:11.5, color:"#9CA3AF" }}>{m.email}</span>
+                          <button
+                            onClick={async () => {
+                              try {
+                                await axios.post(`${API}/REPORTING-CONFIG/MANAGEMENT/RESTORE/${encodeURIComponent(m.email)}`);
+                                await fetchConfig();
+                                showToast("success", `${m.name} re-added to management.`);
+                              } catch (e) {
+                                showToast("error", "Failed to restore member.");
+                              }
+                            }}
+                            style={{ fontSize:11, fontWeight:600, padding:"3px 10px", borderRadius:6,
+                              border:`1px solid ${T.green}`, background:"#f0fdf4", color:T.green,
+                              cursor:"pointer", fontFamily:"inherit", whiteSpace:"nowrap" }}
+                          >+ Re-add</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* ── circle heads table ── */}
