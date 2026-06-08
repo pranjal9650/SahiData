@@ -1291,15 +1291,10 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         grand_plan += c_plan; grand_vis += c_vis
 
         # Circle row
-        ws2.merge_cells(f"A{cur_row}:C{cur_row}")
-        rc = ws2.cell(row=cur_row, column=1, value=circle)
-        rc.font = circle_font; rc.fill = CIRCLE_FILL
-        rc.alignment = Alignment(horizontal="left", vertical="center")
-        rc.border = thin_b
-        for ci, v in [(2, c_plan), (3, c_vis)]:
-            c = ws2.cell(row=cur_row, column=ci, value=v or None)
+        for ci, v in [(1, circle), (2, c_plan or None), (3, c_vis or None)]:
+            c = ws2.cell(row=cur_row, column=ci, value=v)
             c.font = circle_font; c.fill = CIRCLE_FILL
-            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.alignment = Alignment(horizontal="left" if ci == 1 else "center", vertical="center")
             c.border = thin_b
         ws2.row_dimensions[cur_row].height = 18
         cur_row += 1
