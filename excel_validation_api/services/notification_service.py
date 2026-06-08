@@ -1030,7 +1030,7 @@ def build_management_email(management_data, site_down_data, report_date, excel_r
 def _validated_remark(attendance, forms_count, gps=None, site_visit=False, site_master_status=None):
     att = str(attendance).strip().lower()
     if att in ["a", "absent", "--", "-", ""]:
-        return "On leave"
+        return "On Leave"
     # Site master status overrides everything for present employees
     if site_master_status and str(site_master_status).strip().lower() not in ["nan", "none", ""]:
         return str(site_master_status).strip()
@@ -1175,7 +1175,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
 
         circle_emp[circle] += 1
 
-        if gps in ("WFH", "WFO") and att_status not in ("On leave",):
+        if gps in ("WFH", "WFO") and att_status not in ("On Leave",):
             if att_status == "Work done, Verified":
                 circle_att[circle]["Work done, Verified"] += 1
             circle_gps[circle][gps] += 1
