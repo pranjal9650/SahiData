@@ -1302,11 +1302,11 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     _t.fill = PatternFill("solid", fgColor="EFF6FF")
     ws2.row_dimensions[1].height = 20
 
-    # Row 2: Column headers
+    # Row 2: Column headers (all centred)
     for ci, h in enumerate(["Row Labels", "Number of site plan", "Number of site visited"], 1):
         c = ws2.cell(row=2, column=ci, value=h)
         c.font = hdr_font(); c.fill = hdr_fill()
-        c.alignment = Alignment(horizontal="center" if ci > 1 else "left", vertical="center")
+        c.alignment = Alignment(horizontal="center", vertical="center")
         c.border = thin_b
     ws2.row_dimensions[2].height = 22
 
@@ -1323,7 +1323,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         for ci, v in [(1, circle), (2, c_plan), (3, c_vis)]:
             c = ws2.cell(row=cur_row, column=ci, value=v)
             c.font = circle_font; c.fill = CIRCLE_FILL
-            c.alignment = Alignment(horizontal="left" if ci == 1 else "center", vertical="center")
+            c.alignment = Alignment(horizontal="center", vertical="center")
             c.border = thin_b
         ws2.row_dimensions[cur_row].height = 18
         cur_row += 1
@@ -1335,7 +1335,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             # Business domain row
             rb = ws2.cell(row=cur_row, column=1, value=biz)
             rb.font = biz_font; rb.fill = BIZ_FILL
-            rb.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            rb.alignment = Alignment(horizontal="center", vertical="center")
             rb.border = thin_b
             for ci, v in [(2, b_plan), (3, b_vis)]:
                 c = ws2.cell(row=cur_row, column=ci, value=v)
@@ -1350,7 +1350,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 # Employee name row
                 re_ = ws2.cell(row=cur_row, column=1, value=emp["name"])
                 re_.font = emp_font; re_.fill = _ef
-                re_.alignment = Alignment(horizontal="left", vertical="center", indent=2)
+                re_.alignment = Alignment(horizontal="center", vertical="center")
                 re_.border = thin_b
                 for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
                     c = ws2.cell(row=cur_row, column=ci, value=v)
@@ -1363,7 +1363,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
                 # Remark row
                 rr = ws2.cell(row=cur_row, column=1, value=emp["remark"])
                 rr.font = remark_font; rr.fill = REMARK_FILL
-                rr.alignment = Alignment(horizontal="left", vertical="center", indent=3)
+                rr.alignment = Alignment(horizontal="center", vertical="center")
                 rr.border = thin_b
                 for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
                     c = ws2.cell(row=cur_row, column=ci, value=v)
@@ -1376,7 +1376,7 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     # Grand Total row
     gt = ws2.cell(row=cur_row, column=1, value="Grand Total")
     gt.font = grand_font; gt.fill = GRAND_FILL
-    gt.alignment = Alignment(horizontal="left", vertical="center")
+    gt.alignment = Alignment(horizontal="center", vertical="center")
     gt.border = thin_b
     for ci, v in [(2, grand_plan), (3, grand_vis)]:
         c = ws2.cell(row=cur_row, column=ci, value=v)
