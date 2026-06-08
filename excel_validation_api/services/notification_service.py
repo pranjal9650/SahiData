@@ -1168,6 +1168,30 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         if _odr.get("remark") == "Site Visited":
             od_person_counts[_k]["visited"] += 1
 
+    def _lookup_od(fname, uname):
+        """Try multiple name forms to find OD survey data for an employee."""
+        fk = _norm_person(fname)
+        uk = _norm_person(uname)
+        # 1. Exact full name match
+        if fk in od_person_counts:
+            return od_person_counts[fk]
+        # 2. Exact username match
+        if uk in od_person_counts:
+            return od_person_counts[uk]
+        # 3. First-name prefix: "adesh" matches "adesh kumar patel"
+        fname_first = fk.split()[0] if fk else ""
+        if len(fname_first) >= 4:
+            for k, v in od_person_counts.items():
+                if k.split()[0] == fname_first:
+                    return v
+        # 4. Username first word matches OD key first word
+        uk_first = uk.split()[0] if uk else ""
+        if len(uk_first) >= 4:
+            for k, v in od_person_counts.items():
+                if k.split()[0] == uk_first:
+                    return v
+        return None
+
     # ── Build per-employee records ───────────────────────────────────
     _NUM = {1:"one",2:"two",3:"three",4:"four",5:"five",
             6:"six",7:"seven",8:"eight",9:"nine",10:"ten"}
@@ -1176,10 +1200,8 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         _att = str(att).strip().lower()
         if _att in ("a", "absent", "--", "-", ""):
             return "On Leave"
-        # If employee has actual site-visit data, show site remark (not WFH/WFO)
+        # If employee has actual site-visit data, show site-based remark only
         if plan > 0:
-            if sm_stat and str(sm_stat).strip().lower() not in ("nan", "none", ""):
-                return str(sm_stat).strip()
             if visited == plan:
                 return "Verified, site location matched"
             if visited == 0:
@@ -1188,11 +1210,16 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
             v_w = _NUM.get(visited, str(visited))
             return (f"Planned for {p_w} sites, but the site visited only "
                     f"{v_w} site{'s' if visited != 1 else ''}")
-        # No site plan — show attendance/GPS status
+        # No site plan — show attendance/GPS/site-master status
+        if _att in ("a", "absent", "--", "-", ""):
+            return "On Leave"
         if gps in ("WFH", "WFO"):
             return gps
-        if sm_stat and str(sm_stat).strip().lower() not in ("nan", "none", ""):
-            return str(sm_stat).strip()
+        if sm_stat:
+            _sm = str(sm_stat).strip()
+            if _sm.lower() not in ("nan", "none", "", "work done - verified",
+                                   "work done, verified", "no work done"):
+                return _sm
         return "Plan not shared"
 
     circle_biz_emps = OrderedDict()   # circle → biz → [emp_dict]
@@ -1206,10 +1233,8 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
         gps    = _gps.get(uname)
         sm_stat = _sv.get(uname) or _sv.get(fname.lower())
 
-        # Look up OD survey plan/visited
-        fk = _norm_person(fname)
-        uk = _norm_person(uname)
-        od = od_person_counts.get(fk) or od_person_counts.get(uk)
+        # Look up OD survey plan/visited with robust name matching
+        od = _lookup_od(fname, uname)
 
         if od:
             plan    = od["plan"]
