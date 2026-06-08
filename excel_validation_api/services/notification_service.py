@@ -1150,140 +1150,220 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
 
     ws.freeze_panes = "A3"
 
-    # ── Sheet 2: Summary ──────────────────────────────────────────────
+    # ── Sheet 2: Summary (hierarchical: Circle → Business Domain → Employee → Remark) ──
     ws2 = wb.create_sheet("Summary")
+    from collections import defaultdict, OrderedDict
 
-    # Pivot: circle → {status: count}
-    # Rules:
-    #   GPS=WFH/WFO + Work done Verified → mark BOTH (work column + GPS column)
-    #   GPS=WFH/WFO + No work done       → mark GPS column ONLY (suppress No work done)
-    #   GPS=WFH/WFO + On Leave           → mark On Leave ONLY (GPS ignored)
-    #   No GPS                           → mark attendance column as usual
-    from collections import defaultdict
-    circle_att  = defaultdict(lambda: defaultdict(int))  # attendance-based counts
-    circle_gps  = defaultdict(lambda: defaultdict(int))  # GPS-based counts
-    circle_emp  = defaultdict(int)                       # employee count per circle
-    emp_data    = defaultdict(list)
+    # ── Build OD survey plan/visited counts per person ──────────────
+    def _norm_person(name):
+        return re.sub(r'_st[sn]?$', '', str(name), flags=re.IGNORECASE).strip().lower()
+
+    od_person_counts = {}   # norm_key → {"plan": N, "visited": M}
+    for _odr in (od_survey_rows or []):
+        _k = _norm_person(_odr.get("full_name", ""))
+        if not _k:
+            continue
+        od_person_counts.setdefault(_k, {"plan": 0, "visited": 0})
+        od_person_counts[_k]["plan"] += 1
+        if _odr.get("remark") == "Site Visited":
+            od_person_counts[_k]["visited"] += 1
+
+    # ── Build per-employee records ───────────────────────────────────
+    _NUM = {1:"one",2:"two",3:"three",4:"four",5:"five",
+            6:"six",7:"seven",8:"eight",9:"nine",10:"ten"}
+
+    def _remark(att, gps, plan, visited, sm_stat):
+        _att = str(att).strip().lower()
+        if _att in ("a", "absent", "--", "-", ""):
+            return "On Leave"
+        if gps in ("WFH", "WFO"):
+            return gps
+        if sm_stat:
+            _sm = str(sm_stat).strip()
+            if _sm.lower() not in ("nan", "none", ""):
+                return _sm
+        if plan == 0:
+            return "Plan not shared"
+        if visited == plan:
+            return "Verified, site location matched"
+        if visited == 0:
+            return "Site location not matched"
+        p_w = _NUM.get(plan, str(plan))
+        v_w = _NUM.get(visited, str(visited))
+        return (f"Planned for {p_w} sites, but the site visited only "
+                f"{v_w} site{'s' if visited != 1 else ''}")
+
+    circle_biz_emps = OrderedDict()   # circle → biz → [emp_dict]
 
     for row in rows:
-        circle = row.get("circle", "Other")
         uname  = str(row.get("username", "")).strip().lower()
-        fname  = str(row.get("full_name", "")).strip().lower()
+        fname  = str(row.get("full_name", row.get("username", ""))).strip()
+        circle = str(row.get("circle", "Other")).strip() or "Other"
+        biz    = str(row.get("business_domain", "Other")).strip() or "Other"
+        att    = str(row.get("attendance", "")).strip()
         gps    = _gps.get(uname)
-        sm_status = _sv.get(uname) or _sv.get(fname)
-        att_status = _validated_remark(row.get("attendance", ""), row.get("forms_count", 0), gps, site_master_status=sm_status)
+        sm_stat = _sv.get(uname) or _sv.get(fname.lower())
 
-        circle_emp[circle] += 1
+        # Look up OD survey plan/visited
+        fk = _norm_person(fname)
+        uk = _norm_person(uname)
+        od = od_person_counts.get(fk) or od_person_counts.get(uk)
 
-        if gps in ("WFH", "WFO") and att_status not in ("On Leave",):
-            if att_status == "Work done, Verified":
-                circle_att[circle]["Work done, Verified"] += 1
-            circle_gps[circle][gps] += 1
+        if od:
+            plan    = od["plan"]
+            visited = od["visited"]
         else:
-            circle_att[circle][att_status] += 1
+            plan    = int(row.get("forms_count", 0) or 0)
+            _verified = sm_stat and ("verif" in str(sm_stat).lower() or "work done" in str(sm_stat).lower())
+            visited = plan if _verified else 0
 
-        emp_data[circle].append({
-            "name":       row.get("full_name", row.get("username", "")),
-            "att_status": att_status,
-            "gps":        gps,
+        remark = _remark(att, gps, plan, visited, sm_stat)
+
+        circle_biz_emps.setdefault(circle, OrderedDict()).setdefault(biz, []).append({
+            "name": fname, "plan": plan, "visited": visited, "remark": remark,
         })
 
-    S_COLS = STATUS_COLS + ["Grand Total"]
-    S_HEADERS = ["Row Labels"] + S_COLS
+    # Sort circles and business domains
+    circle_biz_emps = OrderedDict(
+        (c, OrderedDict(sorted(b.items())))
+        for c, b in sorted(circle_biz_emps.items())
+    )
 
-    # Title
-    ws2.merge_cells(f"A1:{get_column_letter(len(S_HEADERS))}1")
-    tc2 = ws2["A1"]
-    tc2.value     = f"Employee Productivity Analysis — {report_date}"
-    tc2.font      = Font(bold=True, color=BLUE, name="Calibri", size=13)
-    tc2.alignment = center()
-    tc2.fill      = PatternFill("solid", fgColor="EFF6FF")
-    ws2.row_dimensions[1].height = 22
+    # ── Styles ───────────────────────────────────────────────────────
+    CIRCLE_FILL  = PatternFill("solid", fgColor="DBEAFE")   # light blue
+    BIZ_FILL     = PatternFill("solid", fgColor="EFF6FF")   # lighter blue
+    REMARK_FILL  = PatternFill("solid", fgColor="F9FAFB")   # very light grey
+    GRAND_FILL   = PatternFill("solid", fgColor=BLUE)
 
-    # Column label row
-    ws2.merge_cells(f"B2:{get_column_letter(len(S_HEADERS))}2")
-    cl = ws2["B2"]
-    cl.value = "Column Labels"; cl.font = hdr_font(); cl.fill = hdr_fill()
-    cl.alignment = center(); cl.border = all_border()
-    ws2.row_dimensions[2].height = 18
+    circle_font  = Font(bold=True, color=BLUE,  name="Calibri", size=10)
+    biz_font     = Font(bold=True, color=DARK,  name="Calibri", size=10)
+    emp_font     = Font(color=DARK,             name="Calibri", size=10)
+    remark_font  = Font(color="6B7280",         name="Calibri", size=9, italic=True)
+    grand_font   = Font(bold=True, color=WHITE, name="Calibri", size=10)
 
-    # Header
-    for ci, h in enumerate(S_HEADERS, 1):
+    def _cv(ws2, row, col, val, font, fill, align="left", border=None):
+        c = ws2.cell(row=row, column=col, value=val if val not in ("", None, 0) or isinstance(val, int) else None)
+        c.font = font; c.fill = fill
+        c.alignment = Alignment(horizontal=align, vertical="center")
+        if border:
+            c.border = border
+        return c
+
+    thin_b = Border(left=Side(style="thin", color="E5E7EB"),
+                    right=Side(style="thin", color="E5E7EB"),
+                    top=Side(style="thin", color="E5E7EB"),
+                    bottom=Side(style="thin", color="E5E7EB"))
+
+    # ── Write rows ───────────────────────────────────────────────────
+    # Row 1: Date header
+    ws2.merge_cells("A1:C1")
+    _d = ws2["A1"]
+    _d.value = f"Date\t{report_date}"
+    _d.font  = Font(bold=True, color=DARK, name="Calibri", size=10)
+    _d.alignment = Alignment(horizontal="left", vertical="center")
+    _d.fill = PatternFill("solid", fgColor="EFF6FF")
+    ws2.row_dimensions[1].height = 18
+
+    # Row 2: Title
+    ws2.merge_cells("A2:C2")
+    _t = ws2["A2"]
+    _t.value = f"Employee productivity analysis - {report_date}"
+    _t.font  = Font(bold=True, color=BLUE, name="Calibri", size=12)
+    _t.alignment = Alignment(horizontal="left", vertical="center")
+    _t.fill = PatternFill("solid", fgColor="EFF6FF")
+    ws2.row_dimensions[2].height = 20
+
+    # Row 3: Column headers
+    for ci, h in enumerate(["Row Labels", "Number of site plan", "Number of site visited"], 1):
         c = ws2.cell(row=3, column=ci, value=h)
         c.font = hdr_font(); c.fill = hdr_fill()
-        c.alignment = center(); c.border = all_border()
+        c.alignment = Alignment(horizontal="center" if ci > 1 else "left", vertical="center")
+        c.border = thin_b
     ws2.row_dimensions[3].height = 22
 
-    cur_row = 4
-    grand_att = defaultdict(int)
-    grand_gps = defaultdict(int)
-    grand_emp = 0
+    cur_row   = 4
+    grand_plan = 0
+    grand_vis  = 0
 
-    for circle in sorted(circle_emp.keys()):
-        ca      = circle_att[circle]
-        cg      = circle_gps[circle]
-        g_total = circle_emp[circle]
-        grp_vals = (
-            [circle]
-            + [ca.get(s, "") or "" for s in ATT_COLS]
-            + [cg.get(s, "") or "" for s in GPS_COLS]
-            + [g_total]
-        )
-        for ci, val in enumerate(grp_vals, 1):
-            c = ws2.cell(row=cur_row, column=ci, value=val if val != "" else None)
-            c.font = grp_font(); c.fill = grp_fill()
-            c.alignment = center() if ci > 1 else left()
-            c.border = all_border()
+    for circle, biz_map in circle_biz_emps.items():
+        c_plan = sum(e["plan"]    for emps in biz_map.values() for e in emps)
+        c_vis  = sum(e["visited"] for emps in biz_map.values() for e in emps)
+        grand_plan += c_plan; grand_vis += c_vis
+
+        # Circle row
+        ws2.merge_cells(f"A{cur_row}:C{cur_row}")
+        rc = ws2.cell(row=cur_row, column=1, value=circle)
+        rc.font = circle_font; rc.fill = CIRCLE_FILL
+        rc.alignment = Alignment(horizontal="left", vertical="center")
+        rc.border = thin_b
+        for ci, v in [(2, c_plan), (3, c_vis)]:
+            c = ws2.cell(row=cur_row, column=ci, value=v or None)
+            c.font = circle_font; c.fill = CIRCLE_FILL
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.border = thin_b
         ws2.row_dimensions[cur_row].height = 18
         cur_row += 1
 
-        for ei, emp in enumerate(emp_data[circle]):
-            att   = emp["att_status"]
-            gps   = emp["gps"]
-            marks = defaultdict(int)
+        for biz, emps in biz_map.items():
+            b_plan = sum(e["plan"]    for e in emps)
+            b_vis  = sum(e["visited"] for e in emps)
 
-            if gps in ("WFH", "WFO") and att != "On Leave":
-                if att == "Work done, Verified":
-                    marks["Work done, Verified"] = 1
-                # No work done suppressed — GPS column carries it
-                marks[gps] = 1
-            else:
-                marks[att] = 1
-
-            emp_vals = [emp["name"]] + [marks.get(s, "") or "" for s in STATUS_COLS] + [1]
-            fill = alt_fill(ei)
-            for ci, val in enumerate(emp_vals, 1):
-                c = ws2.cell(row=cur_row, column=ci, value=val if val != "" else None)
-                c.font = bod_font(); c.fill = fill
-                c.alignment = center() if ci > 1 else left()
-                c.border = all_border()
-            ws2.row_dimensions[cur_row].height = 16
+            # Business domain row
+            rb = ws2.cell(row=cur_row, column=1, value=biz)
+            rb.font = biz_font; rb.fill = BIZ_FILL
+            rb.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            rb.border = thin_b
+            for ci, v in [(2, b_plan), (3, b_vis)]:
+                c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                c.font = biz_font; c.fill = BIZ_FILL
+                c.alignment = Alignment(horizontal="center", vertical="center")
+                c.border = thin_b
+            ws2.row_dimensions[cur_row].height = 17
             cur_row += 1
 
-        for s in ATT_COLS:
-            grand_att[s] += ca.get(s, 0)
-        for s in GPS_COLS:
-            grand_gps[s] += cg.get(s, 0)
-        grand_emp += g_total
+            for ei, emp in enumerate(emps):
+                _ef = alt_fill(ei)
+                # Employee name row
+                re_ = ws2.cell(row=cur_row, column=1, value=emp["name"])
+                re_.font = emp_font; re_.fill = _ef
+                re_.alignment = Alignment(horizontal="left", vertical="center", indent=2)
+                re_.border = thin_b
+                for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
+                    c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                    c.font = emp_font; c.fill = _ef
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                    c.border = thin_b
+                ws2.row_dimensions[cur_row].height = 16
+                cur_row += 1
 
-    g_row = (
-        ["Grand Total"]
-        + [grand_att.get(s, "") or "" for s in ATT_COLS]
-        + [grand_gps.get(s, "") or "" for s in GPS_COLS]
-        + [grand_emp]
-    )
-    for ci, val in enumerate(g_row, 1):
-        c = ws2.cell(row=cur_row, column=ci, value=val if val != "" else None)
-        c.font = Font(bold=True, color=WHITE, name="Calibri", size=10)
-        c.fill = PatternFill("solid", fgColor=BLUE)
-        c.alignment = center() if ci > 1 else left()
-        c.border = all_border()
+                # Remark row
+                rr = ws2.cell(row=cur_row, column=1, value=emp["remark"])
+                rr.font = remark_font; rr.fill = REMARK_FILL
+                rr.alignment = Alignment(horizontal="left", vertical="center", indent=3)
+                rr.border = thin_b
+                for ci, v in [(2, emp["plan"]), (3, emp["visited"])]:
+                    c = ws2.cell(row=cur_row, column=ci, value=v or None)
+                    c.font = remark_font; c.fill = REMARK_FILL
+                    c.alignment = Alignment(horizontal="center", vertical="center")
+                    c.border = thin_b
+                ws2.row_dimensions[cur_row].height = 15
+                cur_row += 1
+
+    # Grand Total row
+    gt = ws2.cell(row=cur_row, column=1, value="Grand Total")
+    gt.font = grand_font; gt.fill = GRAND_FILL
+    gt.alignment = Alignment(horizontal="left", vertical="center")
+    gt.border = thin_b
+    for ci, v in [(2, grand_plan), (3, grand_vis)]:
+        c = ws2.cell(row=cur_row, column=ci, value=v or None)
+        c.font = grand_font; c.fill = GRAND_FILL
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = thin_b
     ws2.row_dimensions[cur_row].height = 20
 
-    col_widths2 = [26, 20, 16, 14, 12, 10, 14]
-    for ci, w in enumerate(col_widths2, 1):
-        ws2.column_dimensions[get_column_letter(ci)].width = w
-
+    ws2.column_dimensions["A"].width = 42
+    ws2.column_dimensions["B"].width = 22
+    ws2.column_dimensions["C"].width = 22
     ws2.freeze_panes = "A4"
 
     # ── Sheet 3: Sites Down (optional, blue/white theme) ─────────────
