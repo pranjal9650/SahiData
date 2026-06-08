@@ -1268,17 +1268,17 @@ def build_excel_report(rows, report_date, title="Productivity Report", sites_dow
     )
 
     # ── Styles ───────────────────────────────────────────────────────
-    CIRCLE_FILL  = PatternFill("solid", fgColor="FCE4D6")   # orange accent 2 lighter 80%
+    CIRCLE_FILL  = PatternFill("solid", fgColor="FFF2CC")   # very light orange/yellow
     BIZ_FILL     = PatternFill("solid", fgColor="EFF6FF")   # light blue (business domain)
-    EMP_FILL     = PatternFill("solid", fgColor="E2EFDA")   # green accent 6 lighter 80%
+    EMP_FILL     = PatternFill("solid", fgColor="F0FFF0")   # very light green (honeydew)
     REMARK_FILL  = PatternFill("solid", fgColor="FFFFFF")   # white
     GRAND_FILL   = PatternFill("solid", fgColor=BLUE)
 
-    circle_font  = Font(bold=True, color="843C0C", name="Calibri", size=10)
-    biz_font     = Font(bold=True, color=DARK,     name="Calibri", size=10)
-    emp_font     = Font(bold=True, color="375623", name="Calibri", size=10)
-    remark_font  = Font(color="4B5563",            name="Calibri", size=10)
-    grand_font   = Font(bold=True, color=WHITE,    name="Calibri", size=10)
+    circle_font  = Font(bold=True, color=DARK,  name="Calibri", size=10)
+    biz_font     = Font(bold=True, color=DARK,  name="Calibri", size=10)
+    emp_font     = Font(bold=True, color=DARK,  name="Calibri", size=10)
+    remark_font  = Font(color="4B5563",         name="Calibri", size=10)
+    grand_font   = Font(bold=True, color=WHITE, name="Calibri", size=10)
 
     def _cv(ws2, row, col, val, font, fill, align="left", border=None):
         c = ws2.cell(row=row, column=col, value=val if val not in ("", None, 0) or isinstance(val, int) else None)
